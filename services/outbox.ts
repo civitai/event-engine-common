@@ -20,7 +20,7 @@ export class OutboxService {
 
     async add(record: Omit<OutboxRecord, 'createdAt'>): Promise<void> {
         const query = `
-            INSERT INTO outbox (event, entity_type, entity_id)
+            INSERT INTO "Outbox" (event, "entityType", "entityId")
             VALUES ($1, $2, $3)
         `;
 
@@ -33,7 +33,7 @@ export class OutboxService {
 
     async delete(id: number): Promise<void> {
         const query = `
-            DELETE FROM outbox
+            DELETE FROM "Outbox"
             WHERE id = $1
         `;
         await this.pgClient.query(query, [id]);
