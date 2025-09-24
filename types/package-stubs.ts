@@ -63,8 +63,3 @@ export interface IRedisMulti extends ToMulti<RedisCommands> {
   exec(): Promise<any[]>;
 }
 
-export interface IMeilisearchClient {
-  // TODO luis: stub the Meilisearch client
-  // createOrUpdate
-  // delete
-}

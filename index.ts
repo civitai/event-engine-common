@@ -39,3 +39,44 @@ export { cacheKeys } from './utils/cache-keys';
 // Query utilities - both types and implementations
 export type { RedisWithHelpers } from './utils/query-utils';
 export { SimpleClickhouse, withRedisHelpers } from './utils/query-utils';
+
+// Meilisearch functionality
+export { ModelFeedService } from './services/meilisearch/model-feed';
+export { ImageFeedService } from './services/meilisearch/image-feed';
+
+// Meilisearch types
+export type {
+  ModelRawItem,
+  ImageMetricsSearchIndexRecord,
+  ImageFeedResult,
+  ModelFeedResponse,
+  ImageFeedResponse,
+} from './types/meilisearch/documents';
+
+export type {
+  ModelFeedInput,
+  ImageFeedInput,
+  FeedOptions,
+  SortOption,
+} from './types/meilisearch/inputs';
+
+export {
+  MODELS_INDEX_CONFIG,
+  METRICS_MODELS_INDEX_CONFIG,
+  IMAGES_INDEX_CONFIG,
+  METRICS_IMAGES_INDEX_CONFIG,
+  INDEX_NAMES,
+} from './types/meilisearch/index-configs';
+
+export {
+  MODEL_SORT_OPTIONS,
+  IMAGE_SORT_OPTIONS,
+} from './types/meilisearch/inputs';
+
+export type {
+  IndexConfig,
+  IndexName,
+} from './types/meilisearch/index-configs';
+
+// Meilisearch exports (direct from package)
+export type { MeiliSearch, SearchResponse } from 'meilisearch';

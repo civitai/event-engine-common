@@ -1,0 +1,109 @@
+export interface BaseFeedInput {
+    take?: number;
+    offset?: number;
+    cursor?: string | number;
+}
+export interface ModelFeedInput extends BaseFeedInput {
+    user?: number;
+    query?: string;
+    tag?: string;
+    tagname?: string;
+    username?: string;
+    baseModels?: string[];
+    types?: string[];
+    sort?: string;
+    period?: string;
+    periodMode?: string;
+    hidden?: boolean;
+    checkpointType?: string;
+    status?: string[];
+    allowNoCredit?: boolean;
+    allowDifferentLicense?: boolean;
+    allowDerivatives?: boolean;
+    allowCommercialUse?: string[];
+    ids?: number[];
+    earlyAccess?: boolean;
+    supportsGeneration?: boolean;
+    fromPlatform?: boolean;
+    needsReview?: boolean;
+    collectionId?: number;
+    fileFormats?: string[];
+    clubId?: number;
+    modelVersionIds?: number[];
+    browsingLevel?: number;
+    excludedUserIds?: number[];
+    collectionTagId?: number;
+    availability?: string[];
+    disablePoi?: boolean;
+    disableMinor?: boolean;
+    isFeatured?: boolean;
+    poiOnly?: boolean;
+    minorOnly?: boolean;
+    followed?: boolean;
+    archived?: boolean;
+    pending?: boolean;
+}
+export interface ImageFeedInput extends BaseFeedInput {
+    sort?: string;
+    modelVersionId?: number;
+    types?: string[];
+    withMeta?: boolean;
+    fromPlatform?: boolean;
+    notPublished?: boolean;
+    scheduled?: boolean;
+    username?: string;
+    tags?: string[];
+    tools?: string[];
+    techniques?: string[];
+    baseModels?: string[];
+    period?: string;
+    isModerator?: boolean;
+    currentUserId?: number;
+    excludedUserIds?: number[];
+    hideAutoResources?: boolean;
+    hideManualResources?: boolean;
+    hidden?: boolean;
+    followed?: boolean;
+    limit?: number;
+    entry?: number;
+    postId?: number;
+    reviewId?: number;
+    modelId?: number;
+    prioritizedUserIds?: number[];
+    useCombinedNsfwLevel?: boolean;
+    remixOfId?: number;
+    remixesOnly?: boolean;
+    nonRemixesOnly?: boolean;
+    excludedTagIds?: number[];
+    disablePoi?: boolean;
+    disableMinor?: boolean;
+    requiringMeta?: boolean;
+    poiOnly?: boolean;
+    minorOnly?: boolean;
+    blockedFor?: string[];
+    useLogicalReplica?: boolean;
+    browsingLevel?: number;
+    userId?: number;
+    postIds?: number[];
+}
+export interface FeedOptions {
+    offset?: number;
+    limit?: number;
+    filter?: string[];
+    sort?: string[];
+    attributesToRetrieve?: string[];
+    attributesToCrop?: string[];
+    attributesToHighlight?: string[];
+    cropLength?: number;
+    highlightPreTag?: string;
+    highlightPostTag?: string;
+    showMatchesPosition?: boolean;
+    facets?: string[];
+    q?: string;
+}
+export interface SortOption {
+    field: string;
+    direction: 'asc' | 'desc';
+}
+export declare const MODEL_SORT_OPTIONS: Record<string, SortOption>;
+export declare const IMAGE_SORT_OPTIONS: Record<string, SortOption>;

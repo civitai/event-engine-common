@@ -52,6 +52,4 @@ export interface IRedisClient extends ToClient<RedisCommands> {
 export interface IRedisMulti extends ToMulti<RedisCommands> {
     exec(): Promise<any[]>;
 }
-export interface IMeilisearchClient {
-}
 export {};
