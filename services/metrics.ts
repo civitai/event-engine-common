@@ -268,6 +268,7 @@ export class MetricService {
     // Populate missing results with zeros
     for (const id of uniqueIds) {
       if (results[id]) continue;
+      results[id] = {} as Record<Timeframes, EntityMetricMap[T]>;
       for (const timeframe of TIMEFRAMES) {
         results[id][timeframe] = {...baseMetrics} as EntityMetricMap[T];
       }
