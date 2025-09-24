@@ -10,7 +10,7 @@ export enum OutboxEvent {
 export type OutboxRecord = {
     id: number;
     event: OutboxEvent;
-    entityType: 'Article' | 'Image' | 'Model' | 'Post';
+    entityType: 'Article' | 'Image' | 'Model' | 'Post' | 'ModelVersion';
     entityId: number;
     createdAt?: Date;
 }
