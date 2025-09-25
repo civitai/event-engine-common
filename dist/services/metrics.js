@@ -16,6 +16,11 @@ class MetricService {
     constructor(ch, redis) {
         this.ch = new query_utils_1.SimpleClickhouse(ch);
         this.redis = (0, query_utils_1.withRedisHelpers)(redis);
+        console.log('[MetricService] Initialized with ClickHouse and Redis clients');
+        console.log('[MetricService] Redis client type:', typeof redis);
+        console.log('[MetricService] Redis client constructor:', redis.constructor.name);
+        console.log('[MetricService] withRedisHelpers result type:', typeof this.redis);
+        console.log('[MetricService] Redis helpers available:', Object.getOwnPropertyNames(this.redis));
     }
     getCacheKey(entityType, id) {
         return cache_keys_1.cacheKeys.metric(entityType, id);
@@ -35,13 +40,41 @@ class MetricService {
      * // Return type is Record<number, ImageMetrics>
      */
     async fetch(entityType, ids) {
-        if (!ids.length)
+        const startTime = Date.now();
+        console.log(`[MetricService] fetch() called for entityType: ${entityType}, ids: [${ids.join(', ')}]`);
+        if (!ids.length) {
+            console.log(`[MetricService] No IDs provided, returning empty result`);
             return {};
+        }
         const results = {};
         const uniqueIds = [...new Set(ids)];
         const cacheMisses = [];
         // Step 1: Lookup all IDs in Redis using Promise.all
-        const cacheResults = await this.redis.run(uniqueIds.map((id) => this.redis.hGetAll(this.getCacheKey(entityType, id))));
+        console.log(`[MetricService] Looking up ${uniqueIds.length} IDs in Redis cache`);
+        console.log(`[MetricService] About to call redis.run with ${uniqueIds.length} operations`);
+        console.log(`[MetricService] Redis run function:`, typeof this.redis.run);
+        let cacheResults;
+        try {
+            const operations = uniqueIds.map((id) => {
+                console.log(`[MetricService] Creating hGetAll operation for key: ${this.getCacheKey(entityType, id)}`);
+                return this.redis.hGetAll(this.getCacheKey(entityType, id));
+            });
+            console.log(`[MetricService] Created ${operations.length} hGetAll operations`);
+            console.log(`[MetricService] Calling redis.run with operations...`);
+            cacheResults = await this.redis.run(operations);
+            console.log(`[MetricService] Redis cache lookup completed for ${uniqueIds.length} keys`);
+        }
+        catch (error) {
+            console.error(`[MetricService] Redis cache lookup failed:`, error);
+            // @ts-ignore TS2339
+            console.error(`[MetricService] Error stack:`, error.stack);
+            console.error(`[MetricService] Redis client state:`, {
+                redisType: typeof this.redis,
+                runType: typeof this.redis.run,
+                hasRun: 'run' in this.redis
+            });
+            throw error;
+        }
         // Step 2: Process cache results
         const slideTTLKeys = [];
         for (let i in uniqueIds) {
@@ -72,14 +105,31 @@ class MetricService {
         }
         // Step 3: Slide TTLs for hot cache entries
         if (slideTTLKeys.length > 0) {
-            await this.redis.run(slideTTLKeys.map((key) => this.redis.expire(key, CACHE_TTL)));
+            console.log(`[MetricService] Sliding TTL for ${slideTTLKeys.length} hot cache entries`);
+            try {
+                await this.redis.run(slideTTLKeys.map((key) => this.redis.expire(key, CACHE_TTL)));
+                console.log(`[MetricService] TTL sliding completed for ${slideTTLKeys.length} keys`);
+            }
+            catch (error) {
+                console.error(`[MetricService] TTL sliding failed:`, error);
+                throw error;
+            }
         }
         // Step 4: Handle cache misses with lock mechanism to prevent stampedes
         if (cacheMisses.length > 0) {
             // Try to acquire locks for cache misses
             const lockedIds = [];
             const othersLocked = [];
-            const gotLock = await this.redis.run(cacheMisses.map((id) => this.redis.setNxKeepTtlWithEx(this.getLockKey(entityType, id), '1', LOCK_DURATION)));
+            console.log(`[MetricService] Attempting to acquire locks for ${cacheMisses.length} cache misses`);
+            let gotLock;
+            try {
+                gotLock = await this.redis.run(cacheMisses.map((id) => this.redis.setNxKeepTtlWithEx(this.getLockKey(entityType, id), '1', LOCK_DURATION)));
+                console.log(`[MetricService] Lock acquisition completed`);
+            }
+            catch (error) {
+                console.error(`[MetricService] Lock acquisition failed:`, error);
+                throw error;
+            }
             // Separate IDs we locked vs IDs someone else is fetching
             for (let i = 0; i < cacheMisses.length; i++) {
                 if (gotLock[i])
@@ -89,7 +139,9 @@ class MetricService {
             }
             // Fetch data for IDs we successfully locked
             if (lockedIds.length > 0) {
+                console.log(`[MetricService] Fetching fresh data from ClickHouse for ${lockedIds.length} locked IDs: [${lockedIds.join(', ')}]`);
                 const freshData = await this.fetchFromClickhouse(entityType, lockedIds);
+                console.log(`[MetricService] ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
                 // Cache the results and release locks
                 const cacheAndLockOps = [];
                 for (const id of lockedIds) {
@@ -109,16 +161,37 @@ class MetricService {
                     // Release lock
                     cacheAndLockOps.push(this.redis.del(this.getLockKey(entityType, id)));
                 }
-                await this.redis.run(cacheAndLockOps);
+                console.log(`[MetricService] Executing ${cacheAndLockOps.length} cache and lock operations`);
+                try {
+                    await this.redis.run(cacheAndLockOps);
+                    console.log(`[MetricService] Cache and lock operations completed successfully`);
+                }
+                catch (error) {
+                    console.error(`[MetricService] Cache and lock operations failed:`, error);
+                    throw error;
+                }
             }
             // For IDs where someone else has the lock, wait and retry fetching from cache
             let retry = 0;
+            if (othersLocked.length > 0) {
+                console.log(`[MetricService] Waiting for ${othersLocked.length} IDs locked by other processes: [${othersLocked.join(', ')}]`);
+            }
             while (othersLocked.length > 0 && retry < LOCK_MAX_RETRIES) {
                 // Wait for other processes to populate cache
+                console.log(`[MetricService] Retry ${retry + 1}/${LOCK_MAX_RETRIES}: waiting ${LOCK_RETRY_DELAY}ms for other processes`);
                 await (0, basic_1.sleep)(LOCK_RETRY_DELAY);
                 retry++;
                 // Try to fetch from cache again
-                const retryResults = await this.redis.run(othersLocked.map((id) => this.redis.hGetAll(this.getCacheKey(entityType, id))));
+                console.log(`[MetricService] Retry attempt ${retry}: fetching ${othersLocked.length} IDs from cache`);
+                let retryResults;
+                try {
+                    retryResults = await this.redis.run(othersLocked.map((id) => this.redis.hGetAll(this.getCacheKey(entityType, id))));
+                    console.log(`[MetricService] Retry cache fetch completed`);
+                }
+                catch (error) {
+                    console.error(`[MetricService] Retry cache fetch failed on attempt ${retry}:`, error);
+                    throw error;
+                }
                 // Collect found results
                 const found = [];
                 for (let i of othersLocked) {
@@ -163,14 +236,24 @@ class MetricService {
                 completeResults[id] = { ...baseMetrics };
             }
         }
+        const totalTime = Date.now() - startTime;
+        console.log(`[MetricService] fetch() completed in ${totalTime}ms for entityType: ${entityType}, returned ${Object.keys(completeResults).length} results`);
         return completeResults;
     }
     async fetchFromClickhouse(entityType, ids) {
+        const startTime = Date.now();
+        console.log(`[MetricService] fetchFromClickhouse() called for entityType: ${entityType}, ${ids.length} IDs: [${ids.join(', ')}]`);
         const metrics = {};
         const batches = (0, basic_1.chunk)(ids, FETCH_BATCH_SIZE);
-        for (const batch of batches) {
-            console.log(`Fetching metrics for ${entityType} IDs: ${batch.join(',')}`);
-            const rawMetrics = await this.ch.query `
+        console.log(`[MetricService] Processing ${batches.length} batches of max ${FETCH_BATCH_SIZE} IDs each`);
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+            const batch = batches[batchIndex];
+            const batchStartTime = Date.now();
+            console.log(`[MetricService] Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} IDs: [${batch.join(', ')}]`);
+            let rawMetrics;
+            try {
+                console.log(`[MetricService] Executing ClickHouse query for batch ${batchIndex + 1}`);
+                rawMetrics = await this.ch.query `
                 SELECT
                     entityId,
                     metricType,
@@ -182,40 +265,69 @@ class MetricService {
                 GROUP BY entityId, metricType
                 HAVING value > 0
             `;
-            console.log(`Fetched ${rawMetrics.length} metric rows for ${entityType} IDs: ${batch.join(',')}`);
+                const batchTime = Date.now() - batchStartTime;
+                console.log(`[MetricService] ClickHouse query completed for batch ${batchIndex + 1} in ${batchTime}ms, got ${rawMetrics.length} rows`);
+            }
+            catch (error) {
+                console.error(`[MetricService] ClickHouse query failed for batch ${batchIndex + 1}:`, error);
+                throw error;
+            }
+            console.log(`[MetricService] Processing ${rawMetrics.length} metric rows from batch ${batchIndex + 1}`);
             for (const { entityId, metricType, value } of rawMetrics) {
                 metrics[entityId] ?? (metrics[entityId] = {});
                 metrics[entityId][metricType] = value;
             }
+            console.log(`[MetricService] Completed processing batch ${batchIndex + 1}, current total entities: ${Object.keys(metrics).length}`);
         }
+        const totalTime = Date.now() - startTime;
+        console.log(`[MetricService] fetchFromClickhouse() completed in ${totalTime}ms, returning metrics for ${Object.keys(metrics).length} entities`);
         return metrics;
     }
     async fetchTimeframes(entityType, ids) {
         var _a;
-        if (!ids.length)
+        const startTime = Date.now();
+        console.log(`[MetricService] fetchTimeframes() called for entityType: ${entityType}, ${ids.length} IDs: [${ids.join(', ')}]`);
+        if (!ids.length) {
+            console.log(`[MetricService] No IDs provided for fetchTimeframes, returning empty result`);
             return {};
+        }
         const results = {};
         const uniqueIds = [...new Set(ids)];
         const baseMetrics = {};
         for (const metricType of metric_types_1.ENTITY_METRIC_TYPES[entityType])
             baseMetrics[metricType] = 0;
         const batches = (0, basic_1.chunk)(uniqueIds, FETCH_BATCH_SIZE);
-        for (const batch of batches) {
-            const rawMetrics = await this.ch.query `
-        SELECT
-          entityId,
-          metricType,
-          sumIf(total, day >= today()) AS Day,
-          sumIf(total, day >= subtractWeeks(today(), 1)) AS Week,
-          sumIf(total, day >= subtractMonths(today(), 1)) AS Month,
-          sumIf(total, day >= subtractYears(today(), 1))  AS Year,
-          sum(total) AS AllTime
-        FROM entityMetricDailyAgg
-        WHERE entityType = ${entityType}
-          AND entityId IN (${batch})
-          AND metricType IN (${metric_types_1.ENTITY_METRIC_TYPES[entityType]})
-        GROUP BY entityId, metricType
-      `;
+        console.log(`[MetricService] fetchTimeframes processing ${batches.length} batches`);
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+            const batch = batches[batchIndex];
+            const batchStartTime = Date.now();
+            console.log(`[MetricService] fetchTimeframes processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} IDs`);
+            let rawMetrics;
+            try {
+                console.log(`[MetricService] Executing ClickHouse timeframes query for batch ${batchIndex + 1}`);
+                rawMetrics = await this.ch.query `
+          SELECT
+            entityId,
+            metricType,
+            sumIf(total, day >= today()) AS Day,
+            sumIf(total, day >= subtractWeeks(today(), 1)) AS Week,
+            sumIf(total, day >= subtractMonths(today(), 1)) AS Month,
+            sumIf(total, day >= subtractYears(today(), 1))  AS Year,
+            sum(total) AS AllTime
+          FROM entityMetricDailyAgg
+          WHERE entityType = ${entityType}
+            AND entityId IN (${batch})
+            AND metricType IN (${metric_types_1.ENTITY_METRIC_TYPES[entityType]})
+          GROUP BY entityId, metricType
+        `;
+                const batchTime = Date.now() - batchStartTime;
+                console.log(`[MetricService] ClickHouse timeframes query completed for batch ${batchIndex + 1} in ${batchTime}ms, got ${rawMetrics.length} rows`);
+            }
+            catch (error) {
+                console.error(`[MetricService] ClickHouse timeframes query failed for batch ${batchIndex + 1}:`, error);
+                throw error;
+            }
+            console.log(`[MetricService] Processing ${rawMetrics.length} timeframe rows from batch ${batchIndex + 1}`);
             for (const row of rawMetrics) {
                 const { entityId, metricType, ...timeframeValues } = row;
                 // Initialize metric objects if they don't exist
@@ -226,6 +338,7 @@ class MetricService {
                     results[entityId][timeframe][metricType] = timeframeValues[timeframe];
                 }
             }
+            console.log(`[MetricService] Completed processing timeframes batch ${batchIndex + 1}`);
         }
         // Populate missing results with zeros
         for (const id of uniqueIds) {
@@ -236,14 +349,27 @@ class MetricService {
                 results[id][timeframe] = { ...baseMetrics };
             }
         }
+        const totalTime = Date.now() - startTime;
+        console.log(`[MetricService] fetchTimeframes() completed in ${totalTime}ms, returning data for ${Object.keys(results).length} entities`);
         return results;
     }
     async bustCache(entityType, ids) {
         ids = Array.isArray(ids) ? ids : [ids];
-        if (!ids.length)
+        console.log(`[MetricService] bustCache() called for entityType: ${entityType}, ${Array.isArray(ids) ? ids.length : 1} IDs`);
+        if (!ids.length) {
+            console.log(`[MetricService] No IDs provided for bustCache, returning`);
             return;
+        }
         const uniqueIds = [...new Set(ids)];
-        await this.redis.run(uniqueIds.map((id) => this.redis.del(this.getCacheKey(entityType, id))));
+        console.log(`[MetricService] Deleting cache for ${uniqueIds.length} unique IDs`);
+        try {
+            await this.redis.run(uniqueIds.map((id) => this.redis.del(this.getCacheKey(entityType, id))));
+            console.log(`[MetricService] Cache bust completed for ${uniqueIds.length} keys`);
+        }
+        catch (error) {
+            console.error(`[MetricService] Cache bust failed:`, error);
+            throw error;
+        }
     }
 }
 exports.MetricService = MetricService;

@@ -35,7 +35,7 @@
     "meilisearch": "^0.35.0"
   },
   "peerDependencies": {
-    "redis": ">=4.0.0",
+    "redis": "^4.7.0",
     "pg": ">=8.0.0"
   },
   "devDependencies": {

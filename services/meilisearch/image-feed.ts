@@ -8,6 +8,7 @@ import type {
 import { METRICS_IMAGES_INDEX_CONFIG, INDEX_NAMES } from '../../types/meilisearch/index-configs';
 import { IMAGE_SORT_OPTIONS } from '../../types/meilisearch/inputs';
 import { MetricService } from '../metrics';
+import { ImageMetrics } from '../../types/metric-types';
 
 // Helper functions matching the main app
 export const makeMeiliImageSearchFilter = (
@@ -319,13 +320,13 @@ export class ImageFeedService {
         return {
           ...h,
           stats: {
-            likeCountAllTime: match?.reactionLike ?? 0,
-            laughCountAllTime: match?.reactionLaugh ?? 0,
-            heartCountAllTime: match?.reactionHeart ?? 0,
-            cryCountAllTime: match?.reactionCry ?? 0,
-            commentCountAllTime: match?.comment ?? 0,
-            collectedCountAllTime: match?.collection ?? 0,
-            tippedAmountCountAllTime: match?.buzz ?? 0,
+            likeCountAllTime: match?.ReactionLike ?? 0,
+            laughCountAllTime: match?.ReactionLaugh?? 0,
+            heartCountAllTime: match?.ReactionHeart ?? 0,
+            cryCountAllTime: match?.ReactionCry ?? 0,
+            commentCountAllTime: match?.commentCount ?? 0,
+            collectedCountAllTime: match?.Collection ?? 0,
+            tippedAmountCountAllTime: match?.tippedAmount ?? 0,
             dislikeCountAllTime: 0,
             viewCountAllTime: 0,
           },
@@ -348,12 +349,11 @@ export class ImageFeedService {
   /**
    * Get image metrics object - replica of the main app function
    */
-  private async getImageMetricsObject(data: { id: number }[]): Promise<Record<number, any>> {
+  private async getImageMetricsObject(data: { id: number }[]): Promise<Record<number, ImageMetrics>> {
     try {
       // This would integrate with the metrics cache system
       // For now, return empty metrics (real implementation would fetch from cache)
-      const metrics: Record<number, any> = await this.metricsService.fetch('Image', data.map(d => d.id));
-      console.log(metrics);
+      const metrics = await this.metricsService.fetch('Image', data.map(d => d.id));
       return metrics;
     } catch (e) {
       console.error('Failed to getImageMetrics:', e);

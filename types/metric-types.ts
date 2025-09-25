@@ -44,11 +44,11 @@ export type CollectionMetrics = {
 
 export type ImageMetrics = {
   Collection: number
-  Cry: number
-  Dislike: number
-  Heart: number
-  Laugh: number
-  Like: number
+  ReactionCry: number
+  ReactionDislike: number
+  ReactionHeart: number
+  ReactionLaugh: number
+  ReactionLike: number
   commentCount: number
   tippedAmount: number
   tippedCount: number

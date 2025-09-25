@@ -47,10 +47,42 @@ const redisHelpers = (redis: IRedisClient) => ({
     return result === 1;
   },
   async hSetEx(key: string, fields: Record<string, string>, ttl: number) {
-    return redis.multi().hSet(key, fields).expire(key, ttl).exec();
+    console.log(`[RedisHelpers] hSetEx called for key: ${key}, fields: ${Object.keys(fields).length}, ttl: ${ttl}`);
+    try {
+      // Use pipeline instead of multi to avoid potential transaction issues
+      const pipeline = redis.multi();
+      pipeline.hSet(key, fields);
+      pipeline.expire(key, ttl);
+      console.log(`[RedisHelpers] Executing hSetEx pipeline for key: ${key}`);
+      const result = await pipeline.exec();
+      console.log(`[RedisHelpers] hSetEx completed for key: ${key}`);
+      return result;
+    } catch (error) {
+      console.error(`[RedisHelpers] hSetEx failed for key: ${key}:`, error);
+      // Try alternative approach: separate commands
+      console.log(`[RedisHelpers] Trying separate commands for key: ${key}`);
+      try {
+        await redis.hSet(key, fields);
+        await redis.expire(key, ttl);
+        console.log(`[RedisHelpers] Separate commands succeeded for key: ${key}`);
+        return [[null, 'OK'], [null, 1]]; // Mimic multi result format
+      } catch (fallbackError) {
+        console.error(`[RedisHelpers] Fallback commands also failed for key: ${key}:`, fallbackError);
+        throw fallbackError;
+      }
+    }
   },
   async run<T>(ops: Promise<T>[]) {
-    return Promise.all(ops);
+    console.log(`[RedisHelpers] run() called with ${ops.length} operations`);
+    try {
+      const results = await Promise.all(ops);
+      console.log(`[RedisHelpers] run() completed successfully`);
+      return results;
+    } catch (error) {
+      console.error(`[RedisHelpers] run() failed:`, error);
+      console.error(`[RedisHelpers] Operations types:`, ops.map(op => op.constructor.name));
+      throw error;
+    }
   },
 });
 
@@ -58,11 +90,33 @@ export type RedisWithHelpers = IRedisClient & ReturnType<typeof redisHelpers>;
 
 export function withRedisHelpers(redis: IRedisClient): RedisWithHelpers {
   const helpers = redisHelpers(redis);
+  console.log(`[withRedisHelpers] Creating proxy for Redis client`);
+  console.log(`[withRedisHelpers] Original client type:`, typeof redis);
+  console.log(`[withRedisHelpers] Helpers:`, Object.keys(helpers));
+
   return new Proxy(redis as RedisWithHelpers, {
     get(target, prop, receiver) {
-      if (prop in helpers) return (helpers as any)[prop];
+      console.log(`[withRedisHelpers] Accessing property: ${String(prop)}`);
+
+      if (prop in helpers) {
+        console.log(`[withRedisHelpers] Using helper for: ${String(prop)}`);
+        return (helpers as any)[prop];
+      }
+
       const val = Reflect.get(target as object, prop, receiver);
-      return typeof val === 'function' ? val.bind(target) : val;
+      if (typeof val === 'function') {
+        console.log(`[withRedisHelpers] Binding function: ${String(prop)}`);
+        return function(...args: any[]) {
+          console.log(`[withRedisHelpers] Calling ${String(prop)} with args:`, args.length);
+          try {
+            return val.apply(target, args);
+          } catch (error) {
+            console.error(`[withRedisHelpers] Function ${String(prop)} threw error:`, error);
+            throw error;
+          }
+        };
+      }
+      return val;
     },
   });
 }
