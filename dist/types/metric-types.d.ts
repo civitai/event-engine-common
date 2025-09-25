@@ -121,7 +121,7 @@ export declare const ENTITY_METRIC_TYPES: {
     readonly Bounty: readonly ["benefactorCount", "commentCount", "entryCount", "favoriteCount", "trackCount", "unitAmount"];
     readonly BountyEntry: readonly ["Cry", "Dislike", "Heart", "Laugh", "Like", "unitAmount"];
     readonly Collection: readonly ["contributorCount", "followerCount", "itemCount"];
-    readonly Image: readonly ["Collection", "Cry", "Dislike", "Heart", "Laugh", "Like", "commentCount", "tippedAmount", "tippedCount"];
+    readonly Image: readonly ["Collection", "ReactionCry", "ReactionDislike", "ReactionHeart", "ReactionLaugh", "ReactionLike", "commentCount", "tippedAmount", "tippedCount"];
     readonly Model: readonly ["collectedCount", "commentCount", "imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount", "tippedAmount", "tippedCount"];
     readonly ModelVersion: readonly ["imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount"];
     readonly Post: readonly ["Cry", "Dislike", "Heart", "Laugh", "Like", "collectedCount", "commentCount", "reactionCount", "tippedAmount", "tippedCount"];

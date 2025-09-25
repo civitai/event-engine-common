@@ -92,6 +92,7 @@ export interface ImageFeedInput extends BaseFeedInput {
   browsingLevel?: number;
   userId?: number;
   postIds?: number[];
+  nsfwRestrictedBaseModels?: string[];
 }
 
 // Feed options for Meilisearch queries

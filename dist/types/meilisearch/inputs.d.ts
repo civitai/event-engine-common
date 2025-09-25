@@ -85,6 +85,7 @@ export interface ImageFeedInput extends BaseFeedInput {
     browsingLevel?: number;
     userId?: number;
     postIds?: number[];
+    nsfwRestrictedBaseModels?: string[];
 }
 export interface FeedOptions {
     offset?: number;

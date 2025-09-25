@@ -199,18 +199,20 @@ export class MetricService {
 
     const batches = chunk(ids, FETCH_BATCH_SIZE);
     for (const batch of batches) {
+      console.log(`Fetching metrics for ${entityType} IDs: ${batch.join(',')}`);
       const rawMetrics = await this.ch.query<{ entityId: number; metricType: string; value: number }>`
                 SELECT
                     entityId,
                     metricType,
                     sum(metricValue) as value
                 FROM entityMetricEvents
-                WHERE entityType = ${entityType}
+                WHERE entityType = '${entityType}'
                     AND entityId IN (${batch})
-                    AND metricType IN (${ENTITY_METRIC_TYPES[entityType]})
+                    AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map(v => `'${v}'`).join(',')})
                 GROUP BY entityId, metricType
                 HAVING value > 0
             `;
+      console.log(`Fetched ${rawMetrics.length} metric rows for ${entityType} IDs: ${batch.join(',')}`);
       for (const { entityId, metricType, value } of rawMetrics) {
         metrics[entityId] ??= {} as EntityMetricMap[T];
         (metrics[entityId] as any)[metricType] = value;

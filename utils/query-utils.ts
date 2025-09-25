@@ -18,6 +18,8 @@ export class SimpleClickhouse {
 
   private formatSqlType(value: any): string {
     // Catch any dates being passed in as a string
+
+    
     if (typeof value === 'string' && (value.endsWith('(Coordinated Universal Time)') || /\.\d{3}Z$/.test(value))) {
       value = new Date(value);
     }

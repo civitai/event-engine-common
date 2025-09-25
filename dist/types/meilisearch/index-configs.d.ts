@@ -9,9 +9,7 @@ export declare const METRICS_MODELS_INDEX_CONFIG: IndexConfig;
 export declare const IMAGES_INDEX_CONFIG: IndexConfig;
 export declare const METRICS_IMAGES_INDEX_CONFIG: IndexConfig;
 export declare const INDEX_NAMES: {
-    readonly MODELS: "models";
-    readonly METRICS_MODELS: "models_metrics";
-    readonly IMAGES: "images";
-    readonly METRICS_IMAGES: "images_metrics";
+    readonly MODELS: "feeds_models_v1";
+    readonly IMAGES: "metrics_images_v1";
 };
 export type IndexName = typeof INDEX_NAMES[keyof typeof INDEX_NAMES];

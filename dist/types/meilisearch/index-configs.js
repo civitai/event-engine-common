@@ -151,8 +151,6 @@ exports.METRICS_IMAGES_INDEX_CONFIG = {
 };
 // Index name constants
 exports.INDEX_NAMES = {
-    MODELS: 'models',
-    METRICS_MODELS: 'models_metrics',
-    IMAGES: 'images',
-    METRICS_IMAGES: 'images_metrics',
+    MODELS: 'feeds_models_v1',
+    IMAGES: 'metrics_images_v1',
 };

@@ -120,7 +120,7 @@ export const ENTITY_METRIC_TYPES = {
   Bounty: ['benefactorCount', 'commentCount', 'entryCount', 'favoriteCount', 'trackCount', 'unitAmount'],
   BountyEntry: ['Cry', 'Dislike', 'Heart', 'Laugh', 'Like', 'unitAmount'],
   Collection: ['contributorCount', 'followerCount', 'itemCount'],
-  Image: ['Collection', 'Cry', 'Dislike', 'Heart', 'Laugh', 'Like', 'commentCount', 'tippedAmount', 'tippedCount'],
+  Image: ['Collection', 'ReactionCry', 'ReactionDislike', 'ReactionHeart', 'ReactionLaugh', 'ReactionLike', 'commentCount', 'tippedAmount', 'tippedCount'],
   Model: ['collectedCount', 'commentCount', 'imageCount', 'ratingCount', 'thumbsDownCount', 'thumbsUpCount', 'tippedAmount', 'tippedCount'],
   ModelVersion: ['imageCount', 'ratingCount', 'thumbsDownCount', 'thumbsUpCount'],
   Post: ['Cry', 'Dislike', 'Heart', 'Laugh', 'Like', 'collectedCount', 'commentCount', 'reactionCount', 'tippedAmount', 'tippedCount'],

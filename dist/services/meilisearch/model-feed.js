@@ -15,7 +15,7 @@ class ModelFeedService {
         const { take = 20, offset = 0, sort = 'Newest', browsingLevel = 1, // PG by default
         excludedUserIds = [], ...restInput } = input;
         try {
-            const index = this.client.index(index_configs_1.INDEX_NAMES.METRICS_MODELS);
+            const index = this.client.index(index_configs_1.INDEX_NAMES.MODELS);
             // Build filters
             const filters = [];
             // NSFW Level filtering
