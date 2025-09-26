@@ -90,7 +90,6 @@ class ImageFeedService {
                 }
                 else {
                     logger_1.logger.warn('ImageFeedService', `User not found for username: ${username}`);
-                    // Return empty result when user doesn't exist
                     return { data: [], nextCursor: undefined };
                 }
             }
@@ -109,12 +108,10 @@ class ImageFeedService {
                 logger_1.logger.imageFeed(`Getting hidden images for user ${currentUserId}`);
                 const hiddenResult = await this.dbHelper.getHiddenImageIds(currentUserId);
                 if (hiddenResult.imageIds.length > 0) {
-                    // Add filter to only show hidden images
                     filters.push((0, exports.makeMeiliImageSearchFilter)('id', `IN [${hiddenResult.imageIds.join(',')}]`));
                     logger_1.logger.imageFeed(`Added hidden images filter: ${hiddenResult.imageIds.length} images`);
                 }
                 else {
-                    // User has no hidden images
                     logger_1.logger.imageFeed('User has no hidden images, returning empty result');
                     return { data: [], nextCursor: undefined };
                 }
@@ -128,12 +125,10 @@ class ImageFeedService {
                 logger_1.logger.imageFeed(`Getting followed users for user ${currentUserId}`);
                 const followedResult = await this.dbHelper.getFollowedUserIds(currentUserId);
                 if (followedResult.userIds.length > 0) {
-                    // Add filter to only show content from followed users
                     filters.push((0, exports.makeMeiliImageSearchFilter)('userId', `IN [${followedResult.userIds.join(',')}]`));
                     logger_1.logger.imageFeed(`Added followed users filter: ${followedResult.userIds.length} users`);
                 }
                 else {
-                    // User follows no one
                     logger_1.logger.imageFeed('User follows no one, returning empty result');
                     return { data: [], nextCursor: undefined };
                 }

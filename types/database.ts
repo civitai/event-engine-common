@@ -36,6 +36,7 @@ export interface IDatabaseProvider {
   findImageEngagements(userId: number, type: 'Hide'): Promise<DatabaseImageEngagement[]>;
 }
 
+
 // Query result types
 export interface UsernameToUserIdResult {
   userId: number | null;
