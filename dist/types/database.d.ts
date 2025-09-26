@@ -14,7 +14,7 @@ export interface DatabaseUserEngagement {
 export interface DatabaseImageEngagement {
     userId: number;
     imageId: number;
-    type: 'Hide' | 'Like' | 'Dislike' | 'Heart' | 'Laugh' | 'Cry';
+    type: 'Hide' | 'Favorite';
 }
 export interface IDatabaseProvider {
     findUserByUsername(username: string): Promise<DatabaseUser | null>;

@@ -21,7 +21,7 @@ export interface DatabaseUserEngagement {
 export interface DatabaseImageEngagement {
   userId: number;
   imageId: number;
-  type: 'Hide' | 'Like' | 'Dislike' | 'Heart' | 'Laugh' | 'Cry';
+  type: 'Hide' | 'Favorite';
 }
 
 // Database provider interface - apps implement this to provide database access
