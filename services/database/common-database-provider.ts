@@ -19,7 +19,6 @@ export abstract class CommonDatabaseProvider implements IDatabaseProvider {
   abstract findUserByUsername(username: string): Promise<DatabaseUser | null>;
   abstract findUserEngagements(userId: number, type: 'Follow'): Promise<DatabaseUserEngagement[]>;
   abstract findImageEngagements(userId: number, type: 'Hide'): Promise<DatabaseImageEngagement[]>;
-  abstract isConnected(): Promise<boolean>;
 
   // Common utility methods that can be shared across implementations
   protected logQuery(operation: string, params: any): void {

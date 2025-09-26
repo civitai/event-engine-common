@@ -42,14 +42,5 @@ class DatabaseHelper {
             return { userIds: [] };
         }
     }
-    async checkConnection() {
-        try {
-            return await this.provider.isConnected();
-        }
-        catch (error) {
-            console.error('DatabaseHelper: Error checking connection:', error);
-            return false;
-        }
-    }
 }
 exports.DatabaseHelper = DatabaseHelper;

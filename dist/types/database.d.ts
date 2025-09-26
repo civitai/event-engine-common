@@ -20,7 +20,6 @@ export interface IDatabaseProvider {
     findUserByUsername(username: string): Promise<DatabaseUser | null>;
     findUserEngagements(userId: number, type: 'Follow'): Promise<DatabaseUserEngagement[]>;
     findImageEngagements(userId: number, type: 'Hide'): Promise<DatabaseImageEngagement[]>;
-    isConnected(): Promise<boolean>;
 }
 export interface UsernameToUserIdResult {
     userId: number | null;
@@ -37,5 +36,4 @@ export declare class DatabaseHelper {
     getUserIdFromUsername(username: string): Promise<UsernameToUserIdResult>;
     getHiddenImageIds(userId: number): Promise<HiddenImagesResult>;
     getFollowedUserIds(userId: number): Promise<FollowedUsersResult>;
-    checkConnection(): Promise<boolean>;
 }

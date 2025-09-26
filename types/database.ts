@@ -34,9 +34,6 @@ export interface IDatabaseProvider {
 
   // Image engagement queries
   findImageEngagements(userId: number, type: 'Hide'): Promise<DatabaseImageEngagement[]>;
-
-  // Health check
-  isConnected(): Promise<boolean>;
 }
 
 // Query result types
@@ -90,12 +87,4 @@ export class DatabaseHelper {
     }
   }
 
-  async checkConnection(): Promise<boolean> {
-    try {
-      return await this.provider.isConnected();
-    } catch (error) {
-      console.error('DatabaseHelper: Error checking connection:', error);
-      return false;
-    }
-  }
 }
