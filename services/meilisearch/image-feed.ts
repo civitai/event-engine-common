@@ -76,30 +76,56 @@ export class ImageFeedService {
    */
   async getImagesFeed(input: ImageFeedInput): Promise<ImageFeedResponse> {
     const {
+      // BaseFeedInput properties
+      take,
+      cursor,
+
+      // ImageFeedInput properties
       limit = 100,
       offset = 0,
       sort = 'Newest',
-      browsingLevel: inputBrowsingLevel,
-      currentUserId,
+      modelVersionId,
+      types,
+      withMeta,
+      fromPlatform,
+      notPublished,
+      scheduled,
+      username,
+      tags,
+      tools,
+      techniques,
+      baseModels,
+      period,
       isModerator = false,
+      currentUserId,
       excludedUserIds = [],
-      useCombinedNsfwLevel = false,
+      hideAutoResources,
+      hideManualResources,
+      hidden,
+      followed,
       entry,
+      postId,
+      reviewId,
+      modelId,
+      prioritizedUserIds,
+      useCombinedNsfwLevel = false,
+      remixOfId,
+      remixesOnly,
+      nonRemixesOnly,
+      excludedTagIds,
+      disablePoi,
+      disableMinor,
+      requiringMeta,
+      poiOnly,
+      minorOnly,
+      blockedFor,
+      browsingLevel: inputBrowsingLevel,
+      userId,
+      postIds,
       nsfwRestrictedBaseModels = [],
-      ...restInput
     } = input;
 
-    logger.imageFeed(`getImagesFeed called with:`, {
-      limit,
-      offset,
-      sort,
-      currentUserId,
-      isModerator,
-      excludedUserIdsCount: excludedUserIds.length,
-      entry,
-      period: input.period,
-      userId: input.userId
-    });
+    logger.imageFeed(`getImagesFeed called with:`, input);
 
     try {
       const index = this.client.index(INDEX_NAMES.IMAGES);
@@ -109,15 +135,29 @@ export class ImageFeedService {
       const sorts: string[] = [];
       const snappedNow = this.snapToInterval(Date.now());
 
+      // Handle username to userId conversion (requires database lookup - not implemented in event-engine)
+      let finalUserId = userId;
+      if (username && !finalUserId) {
+        logger.warn('ImageFeedService', 'Username provided but userId lookup not implemented in event-engine');
+        // In the main app, this would do: const targetUser = await dbRead.user.findUnique({ where: { username }, select: { id: true } });
+      }
+
+      // Handle postId -> postIds conversion (exactly like original)
+      let finalPostIds = postIds ? [...postIds] : [];
+      if (postId) {
+        finalPostIds = [...finalPostIds, postId];
+        logger.imageFeed(`Added postId ${postId} to postIds array`);
+      }
+
       // Handle special cases - hidden images
-      if (input.hidden && currentUserId) {
+      if (hidden && currentUserId) {
         // This would require a database call to get hidden images
         // For now, return empty as this is a special case
         return { data: [], nextCursor: undefined };
       }
 
       // Handle followed users
-      if (currentUserId && input.followed) {
+      if (currentUserId && followed) {
         // This would require a database call to get followed users
         // For now, return empty as this is a special case
         return { data: [], nextCursor: undefined };
@@ -135,7 +175,7 @@ export class ImageFeedService {
         makeMeiliImageSearchFilter(nsfwLevelField, `IN [${browsingLevels.join(',')}]`)
       ];
       // Allow users to see their own unscanned content on their user page
-      if (currentUserId && input.userId === currentUserId) {
+      if (currentUserId && finalUserId === currentUserId) {
         nsfwFilters.push(makeMeiliImageSearchFilter(nsfwLevelField, `= 0`));
       }
       filters.push(`(${nsfwFilters.join(' OR ')})`);
@@ -151,52 +191,86 @@ export class ImageFeedService {
         );
       }
 
-      // User exclusions
-      if (excludedUserIds.length > 0) {
-        filters.push(makeMeiliImageSearchFilter('userId', `NOT IN [${excludedUserIds.join(',')}]`));
+      // POI filtering - Past POI cut-off, don't even return for owners
+      if (disablePoi) {
+        filters.push('(NOT poi = true)');
+        logger.imageFeed('Added disablePoi filter');
+      }
+
+      // Minor filtering
+      if (disableMinor) {
+        filters.push('(NOT minor = true)');
+        logger.imageFeed('Added disableMinor filter');
+      }
+
+      // Moderator-only filters
+      if (isModerator) {
+        if (poiOnly) {
+          filters.push('poi = true');
+          logger.imageFeed('Added poiOnly filter (moderator)');
+        }
+        if (minorOnly) {
+          filters.push('minor = true');
+          logger.imageFeed('Added minorOnly filter (moderator)');
+        }
+        if (blockedFor?.length) {
+          const blockedForQuoted = blockedFor.map(bf => `'${bf}'`);
+          filters.push(`blockedFor IN [${blockedForQuoted.join(',')}]`);
+          logger.imageFeed(`Added blockedFor filter: [${blockedFor.join(', ')}]`);
+        }
+      }
+
+      // User exclusions - removed duplicate (handled later with userId logic)
+
+      // Model and Review filtering - NOT SUPPORTED in Meilisearch version (matches original)
+      // Original logs these as "cantProcess" - reviewId, modelId, prioritizedUserIds are not implemented
+      if (modelId || reviewId || prioritizedUserIds) {
+        logger.warn('ImageFeedService', 'modelId and reviewId filters not supported in Meilisearch version (matches original behavior)');
       }
 
       // Model version filtering
-      if (input.modelVersionId) {
-        const versionFilters = [makeMeiliImageSearchFilter('postedToId', `= ${input.modelVersionId}`)];
-        if (!input.hideAutoResources) {
-          versionFilters.push(makeMeiliImageSearchFilter('modelVersionIds', `IN [${input.modelVersionId}]`));
+      if (modelVersionId) {
+        const versionFilters = [makeMeiliImageSearchFilter('postedToId', `= ${modelVersionId}`)];
+        if (!hideAutoResources) {
+          versionFilters.push(makeMeiliImageSearchFilter('modelVersionIds', `IN [${modelVersionId}]`));
         }
-        if (!input.hideManualResources) {
+        if (!hideManualResources) {
           versionFilters.push(
-            makeMeiliImageSearchFilter('modelVersionIdsManual', `IN [${input.modelVersionId}]`)
+            makeMeiliImageSearchFilter('modelVersionIdsManual', `IN [${modelVersionId}]`)
           );
         }
         filters.push(`(${versionFilters.join(' OR ')})`);
+        logger.imageFeed(`Added modelVersionId filter: ${modelVersionId}`);
       }
 
       // Remix filtering
-      if (input.remixOfId) {
-        filters.push(makeMeiliImageSearchFilter('remixOfId', `= ${input.remixOfId}`));
+      if (remixOfId) {
+        filters.push(makeMeiliImageSearchFilter('remixOfId', `= ${remixOfId}`));
       }
-      if (input.remixesOnly && !input.nonRemixesOnly) {
+      if (remixesOnly && !nonRemixesOnly) {
         filters.push(makeMeiliImageSearchFilter('remixOfId', '>= 0'));
       }
-      if (input.nonRemixesOnly) {
+      if (nonRemixesOnly) {
         filters.push(makeMeiliImageSearchFilter('remixOfId', 'NOT EXISTS'));
       }
 
       // Excluded tags filtering
-      if (input.excludedTagIds?.length) {
-        filters.push(makeMeiliImageSearchFilter('tagIds', `NOT IN [${input.excludedTagIds.join(',')}]`));
+      if (excludedTagIds?.length) {
+        filters.push(makeMeiliImageSearchFilter('tagIds', `NOT IN [${excludedTagIds.join(',')}]`));
+        logger.imageFeed(`Added excludedTagIds filter: ${excludedTagIds.length} tags`);
       }
 
       // Meta filtering
-      if (input.withMeta) filters.push(makeMeiliImageSearchFilter('hasMeta', '= true'));
-      if (input.requiringMeta) {
+      if (withMeta) filters.push(makeMeiliImageSearchFilter('hasMeta', '= true'));
+      if (requiringMeta) {
         filters.push(`("blockedFor" = ${1})`); // BlockedReason.AiNotVerified = 1
       }
-      if (input.fromPlatform) filters.push(makeMeiliImageSearchFilter('onSite', '= true'));
+      if (fromPlatform) filters.push(makeMeiliImageSearchFilter('onSite', '= true'));
 
       // Publish Date Filtering
       if (isModerator) {
-        if (input.notPublished) filters.push(makeMeiliImageSearchFilter('publishedAtUnix', 'NOT EXISTS'));
-        else if (input.scheduled)
+        if (notPublished) filters.push(makeMeiliImageSearchFilter('publishedAtUnix', 'NOT EXISTS'));
+        else if (scheduled)
           filters.push(makeMeiliImageSearchFilter('publishedAtUnix', `> ${Date.now()}`));
         else {
           const publishedFilters = [makeMeiliImageSearchFilter('publishedAtUnix', `<= ${Date.now()}`)];
@@ -205,7 +279,7 @@ export class ImageFeedService {
           }
           filters.push(`(${publishedFilters.join(' OR ')})`);
         }
-      } else if (input.userId) {
+      } else if (userId) {
         // For specific user's content, allow seeing scheduled/notPublished content for owners
         // Filtering is handled in post-query filtering
       } else {
@@ -214,24 +288,35 @@ export class ImageFeedService {
       }
 
       // Additional filters
-      if (input.types?.length) filters.push(makeMeiliImageSearchFilter('type', `IN [${input.types.join(',')}]`));
-      if (input.tags?.length) filters.push(makeMeiliImageSearchFilter('tagIds', `IN [${input.tags.join(',')}]`));
-      if (input.tools?.length) filters.push(makeMeiliImageSearchFilter('toolIds', `IN [${input.tools.join(',')}]`));
-      if (input.techniques?.length)
-        filters.push(makeMeiliImageSearchFilter('techniqueIds', `IN [${input.techniques.join(',')}]`));
-      if (input.postIds?.length)
-        filters.push(makeMeiliImageSearchFilter('postId', `IN [${input.postIds.join(',')}]`));
-      if (input.baseModels?.length)
-        filters.push(makeMeiliImageSearchFilter('baseModel', `IN [${input.baseModels.map(bm => `"${bm}"`).join(',')}]`));
-      if (input.userId) filters.push(makeMeiliImageSearchFilter('userId', `= ${input.userId}`));
+      if (types?.length) filters.push(makeMeiliImageSearchFilter('type', `IN [${types.join(',')}]`));
+      if (tags?.length) filters.push(makeMeiliImageSearchFilter('tagIds', `IN [${tags.join(',')}]`));
+      if (tools?.length) filters.push(makeMeiliImageSearchFilter('toolIds', `IN [${tools.join(',')}]`));
+      if (techniques?.length)
+        filters.push(makeMeiliImageSearchFilter('techniqueIds', `IN [${techniques.join(',')}]`));
+      if (finalPostIds?.length) {
+        filters.push(makeMeiliImageSearchFilter('postId', `IN [${finalPostIds.join(',')}]`));
+        logger.imageFeed(`Added postIds filter: [${finalPostIds.join(', ')}]`);
+      }
+      if (baseModels?.length) {
+        filters.push(makeMeiliImageSearchFilter('baseModel', `IN [${baseModels.map(bm => `"${bm}"`).join(',')}]`));
+        logger.imageFeed(`Added baseModels filter: [${baseModels.join(', ')}]`);
+      }
+      // User filtering - exactly like original logic: userId OR excludedUserIds (but not both)
+      if (finalUserId) {
+        filters.push(makeMeiliImageSearchFilter('userId', `= ${finalUserId}`));
+        logger.imageFeed(`Added userId filter: ${finalUserId}`);
+      } else if (excludedUserIds?.length) {
+        filters.push(makeMeiliImageSearchFilter('userId', `NOT IN [${excludedUserIds.join(',')}]`));
+        logger.imageFeed(`Added excludedUserIds filter: ${excludedUserIds.length} users`);
+      }
 
       // Handle period filter
-      if (input.period && input.period !== 'AllTime') {
+      if (period && period !== 'AllTime') {
         const now = Date.now();
         let afterDate: Date;
 
         // Simple period calculation (would use dayjs in real implementation)
-        switch (input.period.toLowerCase()) {
+        switch (period.toLowerCase()) {
           case 'day':
             afterDate = new Date(now - 24 * 60 * 60 * 1000);
             break;
