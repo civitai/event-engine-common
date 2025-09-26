@@ -18,6 +18,7 @@ const LOG_LEVELS: LogLevel = {
 class EventEngineLogger {
   private enabled: boolean;
   private logLevel: number;
+  private enabledComponents: Set<string>;
 
   constructor() {
     // Enable logging if DEBUG_EVENT_ENGINE is set or NODE_ENV is development
@@ -29,10 +30,33 @@ class EventEngineLogger {
     // Set log level from environment, default to DEBUG if enabled
     const envLogLevel = process.env.EVENT_ENGINE_LOG_LEVEL?.toUpperCase() as keyof LogLevel;
     this.logLevel = this.enabled ? (LOG_LEVELS[envLogLevel] ?? LOG_LEVELS.DEBUG) : LOG_LEVELS.ERROR;
+
+    // Parse enabled components from environment
+    // Format: DEBUG_EVENT_ENGINE_COMPONENTS=MetricService,ImageFeedService,Redis
+    // If not set, all components are enabled by default
+    const enabledComponentsEnv = process.env.DEBUG_EVENT_ENGINE_COMPONENTS;
+    if (enabledComponentsEnv) {
+      this.enabledComponents = new Set(
+        enabledComponentsEnv.split(',').map(c => c.trim())
+      );
+    } else {
+      // All components enabled by default
+      this.enabledComponents = new Set(['*']);
+    }
   }
 
-  private shouldLog(level: number): boolean {
-    return this.enabled && level >= this.logLevel;
+  private shouldLog(level: number, component?: string): boolean {
+    if (!this.enabled || level < this.logLevel) {
+      return false;
+    }
+
+    // If no component specified, use general enabled check
+    if (!component) {
+      return true;
+    }
+
+    // Check if specific component is enabled
+    return this.enabledComponents.has('*') || this.enabledComponents.has(component);
   }
 
   private formatMessage(component: string, message: string, ...args: any[]): string {
@@ -41,25 +65,25 @@ class EventEngineLogger {
   }
 
   debug(component: string, message: string, ...args: any[]): void {
-    if (this.shouldLog(LOG_LEVELS.DEBUG)) {
+    if (this.shouldLog(LOG_LEVELS.DEBUG, component)) {
       console.debug(this.formatMessage(component, message), ...args);
     }
   }
 
   info(component: string, message: string, ...args: any[]): void {
-    if (this.shouldLog(LOG_LEVELS.INFO)) {
+    if (this.shouldLog(LOG_LEVELS.INFO, component)) {
       console.info(this.formatMessage(component, message), ...args);
     }
   }
 
   warn(component: string, message: string, ...args: any[]): void {
-    if (this.shouldLog(LOG_LEVELS.WARN)) {
+    if (this.shouldLog(LOG_LEVELS.WARN, component)) {
       console.warn(this.formatMessage(component, message), ...args);
     }
   }
 
   error(component: string, message: string, ...args: any[]): void {
-    if (this.shouldLog(LOG_LEVELS.ERROR)) {
+    if (this.shouldLog(LOG_LEVELS.ERROR, component)) {
       console.error(this.formatMessage(component, message), ...args);
     }
   }
@@ -77,22 +101,26 @@ class EventEngineLogger {
     this.debug('ClickHouse', message, ...args);
   }
 
+  imageFeed(message: string, ...args: any[]): void {
+    this.debug('ImageFeedService', message, ...args);
+  }
+
   // Performance timing helpers
   time(component: string, label: string): void {
-    if (this.shouldLog(LOG_LEVELS.DEBUG)) {
+    if (this.shouldLog(LOG_LEVELS.DEBUG, component)) {
       console.time(this.formatMessage(component, label));
     }
   }
 
   timeEnd(component: string, label: string): void {
-    if (this.shouldLog(LOG_LEVELS.DEBUG)) {
+    if (this.shouldLog(LOG_LEVELS.DEBUG, component)) {
       console.timeEnd(this.formatMessage(component, label));
     }
   }
 
   // Structured logging for complex objects
   logObject(component: string, message: string, obj: any): void {
-    if (this.shouldLog(LOG_LEVELS.DEBUG)) {
+    if (this.shouldLog(LOG_LEVELS.DEBUG, component)) {
       this.debug(component, message);
       console.table(obj);
     }
@@ -105,6 +133,11 @@ class EventEngineLogger {
 
   get isDebugEnabled(): boolean {
     return this.shouldLog(LOG_LEVELS.DEBUG);
+  }
+
+  // Check if specific component is enabled
+  isComponentEnabled(component: string): boolean {
+    return this.shouldLog(LOG_LEVELS.DEBUG, component);
   }
 }
 

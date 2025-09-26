@@ -59,7 +59,7 @@ export interface ImageFeedInput extends BaseFeedInput {
   notPublished?: boolean;
   scheduled?: boolean;
   username?: string;
-  tags?: string[];
+  tags?: number[];
   tools?: string[];
   techniques?: string[];
   baseModels?: string[];

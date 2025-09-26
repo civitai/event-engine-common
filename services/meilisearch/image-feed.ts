@@ -9,6 +9,7 @@ import { METRICS_IMAGES_INDEX_CONFIG, INDEX_NAMES } from '../../types/meilisearc
 import { IMAGE_SORT_OPTIONS } from '../../types/meilisearch/inputs';
 import { MetricService } from '../metrics';
 import { ImageMetrics } from '../../types/metric-types';
+import { logger } from '../../utils/logger';
 
 // Helper functions matching the main app
 export const makeMeiliImageSearchFilter = (
@@ -65,6 +66,8 @@ export class ImageFeedService {
   constructor(private client: MeiliSearch, private metricsService: MetricService) {
     this.client = client;
     this.metricsService = metricsService;
+    logger.imageFeed('ImageFeedService initialized');
+    logger.imageFeed('Available sort options:', Object.keys(IMAGE_SORT_OPTIONS));
   }
 
   /**
@@ -85,6 +88,18 @@ export class ImageFeedService {
       nsfwRestrictedBaseModels = [],
       ...restInput
     } = input;
+
+    logger.imageFeed(`getImagesFeed called with:`, {
+      limit,
+      offset,
+      sort,
+      currentUserId,
+      isModerator,
+      excludedUserIdsCount: excludedUserIds.length,
+      entry,
+      period: input.period,
+      userId: input.userId
+    });
 
     try {
       const index = this.client.index(INDEX_NAMES.IMAGES);
@@ -239,20 +254,39 @@ export class ImageFeedService {
       }
 
       // Sort handling with entry-based pagination
+      logger.imageFeed(`Processing sort: '${sort}'`);
+
+      const sortConfig = IMAGE_SORT_OPTIONS[sort];
+      if (!sortConfig) {
+        logger.warn('ImageFeedService', `Unknown sort option: '${sort}', falling back to 'Newest'`);
+      }
+
+      const finalSortConfig = sortConfig || IMAGE_SORT_OPTIONS['Newest'];
+      logger.imageFeed(`Using sort config:`, finalSortConfig);
+
       let searchSort: string;
       if (sort === 'Oldest') {
+        // Special handling for Oldest to maintain backward compatibility
         searchSort = makeMeiliImageSearchSort('sortAt', 'asc');
+        logger.imageFeed('Using legacy Oldest sort with sortAt field');
       } else {
-        searchSort = makeMeiliImageSearchSort('sortAt', 'desc');
-        // For entry-based pagination
-        if (entry) {
+        // Use the proper field from sort config
+        const fieldToUse = finalSortConfig.field === 'sortAtUnix' ? 'sortAt' : finalSortConfig.field;
+        searchSort = makeMeiliImageSearchSort(fieldToUse, finalSortConfig.direction);
+        logger.imageFeed(`Using sort: ${fieldToUse}:${finalSortConfig.direction}`);
+
+        // For entry-based pagination with time-based sorts
+        if (entry && (finalSortConfig.field === 'sortAtUnix' || fieldToUse === 'sortAt')) {
           filters.push(
             makeMeiliImageSearchFilter('sortAtUnix', `<= ${this.snapToInterval(Math.round(entry))}`)
           );
+          logger.imageFeed(`Added entry filter: sortAtUnix <= ${this.snapToInterval(Math.round(entry))}`);
         }
       }
+
       sorts.push(searchSort);
       sorts.push(makeMeiliImageSearchSort('id', 'desc')); // secondary sort for consistency
+      logger.imageFeed(`Final sorts array:`, sorts);
 
       // Overfetch to ensure we have enough results after post-query filtering
       const OVERFETCH_MULTIPLIER = 1.5;
@@ -263,10 +297,19 @@ export class ImageFeedService {
         offset,
       };
 
+      logger.imageFeed('Meilisearch options:', {
+        filter: searchOptions.filter,
+        sort: searchOptions.sort,
+        limit: searchOptions.limit,
+        offset: searchOptions.offset
+      });
+
+      logger.imageFeed('Executing Meilisearch query...');
       const searchResponse: SearchResponse<ImageMetricsSearchIndexRecord> =
         await index.search(null, searchOptions); // Use null instead of empty string
 
       const hits = searchResponse.hits || [];
+      logger.imageFeed(`Meilisearch returned ${hits.length} hits, took ${searchResponse.processingTimeMs}ms`);
 
       // Determine next cursor using entry-based approach
       let nextCursor: number | undefined;
@@ -278,6 +321,7 @@ export class ImageFeedService {
       }
 
       // Apply post-query user-specific filtering (exact match from original)
+      logger.imageFeed(`Applying post-query filtering to ${hits.length} hits`);
       const filteredHits = hits.filter((hit) => {
         if (!hit.url) return false; // check for good data
 
@@ -305,6 +349,7 @@ export class ImageFeedService {
 
       // Trim results back to requested limit after filtering
       const limitedHits = filteredHits.slice(0, limit + 1);
+      logger.imageFeed(`After filtering: ${filteredHits.length} hits, limited to: ${limitedHits.length}`);
 
       // Get all image IDs from limited results
       const searchImageIds = limitedHits.map((hit) => hit.id);
@@ -314,7 +359,10 @@ export class ImageFeedService {
       const filtered = limitedHits.filter(hit => filteredHitIds.includes(hit.id));
 
       // Get metrics and build final result
+      logger.imageFeed(`Fetching metrics for ${filtered.length} images`);
       const imageMetrics = await this.getImageMetricsObject(filtered);
+      logger.imageFeed(`Retrieved metrics for ${Object.keys(imageMetrics).length} images`);
+
       const fullData = filtered.map((h) => {
         const match = imageMetrics[h.id];
         return {
@@ -333,12 +381,14 @@ export class ImageFeedService {
         };
       });
 
+      logger.imageFeed(`Returning ${fullData.length} results with nextCursor: ${nextCursor}`);
+
       return {
         data: fullData,
         nextCursor,
       };
     } catch (error) {
-      console.error('Error in ImageFeedService.getImagesFeed:', error);
+      logger.error('ImageFeedService', 'Error in getImagesFeed:', error);
       return {
         data: [],
         nextCursor: undefined,
@@ -351,12 +401,13 @@ export class ImageFeedService {
    */
   private async getImageMetricsObject(data: { id: number }[]): Promise<Record<number, ImageMetrics>> {
     try {
-      // This would integrate with the metrics cache system
-      // For now, return empty metrics (real implementation would fetch from cache)
-      const metrics = await this.metricsService.fetch('Image', data.map(d => d.id));
+      const imageIds = data.map(d => d.id);
+      logger.imageFeed(`Fetching metrics for image IDs: [${imageIds.join(', ')}]`);
+      const metrics = await this.metricsService.fetch('Image', imageIds);
+      logger.imageFeed(`Metrics fetch completed for ${Object.keys(metrics).length} images`);
       return metrics;
     } catch (e) {
-      console.error('Failed to getImageMetrics:', e);
+      logger.error('ImageFeedService', 'Failed to getImageMetrics:', e);
       return {};
     }
   }

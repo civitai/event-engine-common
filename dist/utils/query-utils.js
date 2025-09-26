@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SimpleClickhouse = void 0;
 exports.withRedisHelpers = withRedisHelpers;
+const logger_1 = require("./logger");
 class SimpleClickhouse {
     constructor(ch) {
         this.ch = ch;
@@ -48,69 +49,77 @@ const redisHelpers = (redis) => ({
         return result === 1;
     },
     async hSetEx(key, fields, ttl) {
-        console.log(`[RedisHelpers] hSetEx called for key: ${key}, fields: ${Object.keys(fields).length}, ttl: ${ttl}`);
+        logger_1.logger.redis(`hSetEx called for key: ${key}, fields: ${Object.keys(fields).length}, ttl: ${ttl}`);
         try {
             // Use pipeline instead of multi to avoid potential transaction issues
             const pipeline = redis.multi();
             pipeline.hSet(key, fields);
             pipeline.expire(key, ttl);
-            console.log(`[RedisHelpers] Executing hSetEx pipeline for key: ${key}`);
+            logger_1.logger.redis(`Executing hSetEx pipeline for key: ${key}`);
             const result = await pipeline.exec();
-            console.log(`[RedisHelpers] hSetEx completed for key: ${key}`);
+            logger_1.logger.redis(`hSetEx completed for key: ${key}`);
             return result;
         }
         catch (error) {
-            console.error(`[RedisHelpers] hSetEx failed for key: ${key}:`, error);
+            logger_1.logger.error('RedisHelpers', `hSetEx failed for key: ${key}:`, error);
             // Try alternative approach: separate commands
-            console.log(`[RedisHelpers] Trying separate commands for key: ${key}`);
+            logger_1.logger.redis(`Trying separate commands for key: ${key}`);
             try {
                 await redis.hSet(key, fields);
                 await redis.expire(key, ttl);
-                console.log(`[RedisHelpers] Separate commands succeeded for key: ${key}`);
+                logger_1.logger.redis(`Separate commands succeeded for key: ${key}`);
                 return [[null, 'OK'], [null, 1]]; // Mimic multi result format
             }
             catch (fallbackError) {
-                console.error(`[RedisHelpers] Fallback commands also failed for key: ${key}:`, fallbackError);
+                logger_1.logger.error('RedisHelpers', `Fallback commands also failed for key: ${key}:`, fallbackError);
                 throw fallbackError;
             }
         }
     },
     async run(ops) {
-        console.log(`[RedisHelpers] run() called with ${ops.length} operations`);
+        logger_1.logger.redis(`run() called with ${ops.length} operations`);
         try {
             const results = await Promise.all(ops);
-            console.log(`[RedisHelpers] run() completed successfully`);
+            logger_1.logger.redis('run() completed successfully');
             return results;
         }
         catch (error) {
-            console.error(`[RedisHelpers] run() failed:`, error);
-            console.error(`[RedisHelpers] Operations types:`, ops.map(op => op.constructor.name));
+            logger_1.logger.error('RedisHelpers', 'run() failed:', error);
+            logger_1.logger.error('RedisHelpers', 'Operations types:', ops.map(op => op.constructor.name));
             throw error;
         }
     },
 });
 function withRedisHelpers(redis) {
     const helpers = redisHelpers(redis);
-    console.log(`[withRedisHelpers] Creating proxy for Redis client`);
-    console.log(`[withRedisHelpers] Original client type:`, typeof redis);
-    console.log(`[withRedisHelpers] Helpers:`, Object.keys(helpers));
+    logger_1.logger.redis('Creating proxy for Redis client');
+    logger_1.logger.redis('Original client type:', typeof redis);
+    logger_1.logger.redis('Helpers:', Object.keys(helpers));
     return new Proxy(redis, {
         get(target, prop, receiver) {
-            console.log(`[withRedisHelpers] Accessing property: ${String(prop)}`);
+            if (logger_1.logger.isDebugEnabled) {
+                logger_1.logger.redis(`Accessing property: ${String(prop)}`);
+            }
             if (prop in helpers) {
-                console.log(`[withRedisHelpers] Using helper for: ${String(prop)}`);
+                if (logger_1.logger.isDebugEnabled) {
+                    logger_1.logger.redis(`Using helper for: ${String(prop)}`);
+                }
                 return helpers[prop];
             }
             const val = Reflect.get(target, prop, receiver);
             if (typeof val === 'function') {
-                console.log(`[withRedisHelpers] Binding function: ${String(prop)}`);
+                if (logger_1.logger.isDebugEnabled) {
+                    logger_1.logger.redis(`Binding function: ${String(prop)}`);
+                }
                 return function (...args) {
-                    console.log(`[withRedisHelpers] Calling ${String(prop)} with args:`, args.length);
+                    if (logger_1.logger.isDebugEnabled) {
+                        logger_1.logger.redis(`Calling ${String(prop)} with args:`, args.length);
+                    }
                     try {
                         return val.apply(target, args);
                     }
                     catch (error) {
-                        console.error(`[withRedisHelpers] Function ${String(prop)} threw error:`, error);
+                        logger_1.logger.error('withRedisHelpers', `Function ${String(prop)} threw error:`, error);
                         throw error;
                     }
                 };
