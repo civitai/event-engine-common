@@ -1,7 +1,7 @@
 export interface BaseFeedInput {
     take?: number;
     offset?: number;
-    cursor?: string | number;
+    cursor?: string | number | bigint | Date | undefined;
 }
 export interface ModelFeedInput extends BaseFeedInput {
     user?: number;
@@ -53,8 +53,8 @@ export interface ImageFeedInput extends BaseFeedInput {
     scheduled?: boolean;
     username?: string;
     tags?: number[];
-    tools?: string[];
-    techniques?: string[];
+    tools?: number[];
+    techniques?: number[];
     baseModels?: string[];
     period?: string;
     isModerator?: boolean;
