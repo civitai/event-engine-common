@@ -2,12 +2,14 @@ import type { MeiliSearch } from 'meilisearch';
 import type { ImageFeedInput } from '../../types/meilisearch/inputs';
 import type { ImageFeedResponse } from '../../types/meilisearch/documents';
 import { MetricService } from '../metrics';
+import type { IDatabaseProvider } from '../../types/database';
 export declare const makeMeiliImageSearchFilter: (field: string, criteria: string) => string;
 export declare const makeMeiliImageSearchSort: (field: string, criteria: "asc" | "desc") => string;
 export declare class ImageFeedService {
     private client;
     private metricsService;
-    constructor(client: MeiliSearch, metricsService: MetricService);
+    private dbHelper?;
+    constructor(client: MeiliSearch, metricsService: MetricService, databaseProvider?: IDatabaseProvider);
     /**
      * Get images feed using the METRICS_IMAGES_SEARCH_INDEX
      * Exact replica of getImagesFromSearchPreFilter functionality

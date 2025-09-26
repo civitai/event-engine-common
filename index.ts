@@ -44,6 +44,22 @@ export { SimpleClickhouse, withRedisHelpers } from './utils/query-utils';
 export { ModelFeedService } from './services/meilisearch/model-feed';
 export { ImageFeedService } from './services/meilisearch/image-feed';
 
+// Database functionality
+export {
+  CommonDatabaseProvider,
+  DatabaseHelper,
+} from './services/database';
+
+export type {
+  IDatabaseProvider,
+  DatabaseUser,
+  DatabaseUserEngagement,
+  DatabaseImageEngagement,
+  UsernameToUserIdResult,
+  HiddenImagesResult,
+  FollowedUsersResult,
+} from './services/database';
+
 // Meilisearch types
 export type {
   ModelRawItem,

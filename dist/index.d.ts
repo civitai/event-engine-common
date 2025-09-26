@@ -11,6 +11,8 @@ export type { RedisWithHelpers } from './utils/query-utils';
 export { SimpleClickhouse, withRedisHelpers } from './utils/query-utils';
 export { ModelFeedService } from './services/meilisearch/model-feed';
 export { ImageFeedService } from './services/meilisearch/image-feed';
+export { CommonDatabaseProvider, DatabaseHelper, } from './services/database';
+export type { IDatabaseProvider, DatabaseUser, DatabaseUserEngagement, DatabaseImageEngagement, UsernameToUserIdResult, HiddenImagesResult, FollowedUsersResult, } from './services/database';
 export type { ModelRawItem, ImageMetricsSearchIndexRecord, ImageFeedResult, ModelFeedResponse, ImageFeedResponse, } from './types/meilisearch/documents';
 export type { ModelFeedInput, ImageFeedInput, FeedOptions, SortOption, } from './types/meilisearch/inputs';
 export { MODELS_INDEX_CONFIG, METRICS_MODELS_INDEX_CONFIG, IMAGES_INDEX_CONFIG, METRICS_IMAGES_INDEX_CONFIG, INDEX_NAMES, } from './types/meilisearch/index-configs';

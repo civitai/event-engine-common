@@ -1,7 +1,7 @@
 "use strict";
 // Event Engine Common - Shared services and utilities for Civitai event engine applications
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.IMAGE_SORT_OPTIONS = exports.MODEL_SORT_OPTIONS = exports.INDEX_NAMES = exports.METRICS_IMAGES_INDEX_CONFIG = exports.IMAGES_INDEX_CONFIG = exports.METRICS_MODELS_INDEX_CONFIG = exports.MODELS_INDEX_CONFIG = exports.ImageFeedService = exports.ModelFeedService = exports.withRedisHelpers = exports.SimpleClickhouse = exports.cacheKeys = exports.sleep = exports.chunk = exports.ENTITY_METRIC_TYPES = exports.SignalsService = exports.OutboxEvent = exports.OutboxService = exports.MetricService = void 0;
+exports.IMAGE_SORT_OPTIONS = exports.MODEL_SORT_OPTIONS = exports.INDEX_NAMES = exports.METRICS_IMAGES_INDEX_CONFIG = exports.IMAGES_INDEX_CONFIG = exports.METRICS_MODELS_INDEX_CONFIG = exports.MODELS_INDEX_CONFIG = exports.DatabaseHelper = exports.CommonDatabaseProvider = exports.ImageFeedService = exports.ModelFeedService = exports.withRedisHelpers = exports.SimpleClickhouse = exports.cacheKeys = exports.sleep = exports.chunk = exports.ENTITY_METRIC_TYPES = exports.SignalsService = exports.OutboxEvent = exports.OutboxService = exports.MetricService = void 0;
 // Services
 var metrics_1 = require("./services/metrics");
 Object.defineProperty(exports, "MetricService", { enumerable: true, get: function () { return metrics_1.MetricService; } });
@@ -26,6 +26,10 @@ var model_feed_1 = require("./services/meilisearch/model-feed");
 Object.defineProperty(exports, "ModelFeedService", { enumerable: true, get: function () { return model_feed_1.ModelFeedService; } });
 var image_feed_1 = require("./services/meilisearch/image-feed");
 Object.defineProperty(exports, "ImageFeedService", { enumerable: true, get: function () { return image_feed_1.ImageFeedService; } });
+// Database functionality
+var database_1 = require("./services/database");
+Object.defineProperty(exports, "CommonDatabaseProvider", { enumerable: true, get: function () { return database_1.CommonDatabaseProvider; } });
+Object.defineProperty(exports, "DatabaseHelper", { enumerable: true, get: function () { return database_1.DatabaseHelper; } });
 var index_configs_1 = require("./types/meilisearch/index-configs");
 Object.defineProperty(exports, "MODELS_INDEX_CONFIG", { enumerable: true, get: function () { return index_configs_1.MODELS_INDEX_CONFIG; } });
 Object.defineProperty(exports, "METRICS_MODELS_INDEX_CONFIG", { enumerable: true, get: function () { return index_configs_1.METRICS_MODELS_INDEX_CONFIG; } });

@@ -4,6 +4,7 @@ exports.ImageFeedService = exports.makeMeiliImageSearchSort = exports.makeMeiliI
 const index_configs_1 = require("../../types/meilisearch/index-configs");
 const inputs_1 = require("../../types/meilisearch/inputs");
 const logger_1 = require("../../utils/logger");
+const database_1 = require("../../types/database");
 // Helper functions matching the main app
 const makeMeiliImageSearchFilter = (field, criteria) => {
     return `${field} ${criteria}`;
@@ -46,13 +47,16 @@ function onlySelectableLevels(level) {
     return level;
 }
 class ImageFeedService {
-    constructor(client, metricsService) {
+    constructor(client, metricsService, databaseProvider) {
         this.client = client;
         this.metricsService = metricsService;
         this.client = client;
         this.metricsService = metricsService;
+        // Use provided database provider if available
+        this.dbHelper = databaseProvider ? new database_1.DatabaseHelper(databaseProvider) : undefined;
         logger_1.logger.imageFeed('ImageFeedService initialized');
         logger_1.logger.imageFeed('Available sort options:', Object.keys(inputs_1.IMAGE_SORT_OPTIONS));
+        logger_1.logger.imageFeed('Database provider:', databaseProvider ? 'provided' : 'not provided');
     }
     /**
      * Get images feed using the METRICS_IMAGES_SEARCH_INDEX
@@ -71,11 +75,24 @@ class ImageFeedService {
             const filters = [];
             const sorts = [];
             const snappedNow = this.snapToInterval(Date.now());
-            // Handle username to userId conversion (requires database lookup - not implemented in event-engine)
+            // Handle username to userId conversion
             let finalUserId = userId;
             if (username && !finalUserId) {
-                logger_1.logger.warn('ImageFeedService', 'Username provided but userId lookup not implemented in event-engine');
-                // In the main app, this would do: const targetUser = await dbRead.user.findUnique({ where: { username }, select: { id: true } });
+                if (!this.dbHelper) {
+                    logger_1.logger.warn('ImageFeedService', 'Username provided but no database provider available');
+                    return { data: [], nextCursor: undefined };
+                }
+                logger_1.logger.imageFeed(`Looking up userId for username: ${username}`);
+                const userResult = await this.dbHelper.getUserIdFromUsername(username);
+                if (userResult.userId) {
+                    finalUserId = userResult.userId;
+                    logger_1.logger.imageFeed(`Found userId ${finalUserId} for username ${username}`);
+                }
+                else {
+                    logger_1.logger.warn('ImageFeedService', `User not found for username: ${username}`);
+                    // Return empty result when user doesn't exist
+                    return { data: [], nextCursor: undefined };
+                }
             }
             // Handle postId -> postIds conversion (exactly like original)
             let finalPostIds = postIds ? [...postIds] : [];
@@ -85,15 +102,41 @@ class ImageFeedService {
             }
             // Handle special cases - hidden images
             if (hidden && currentUserId) {
-                // This would require a database call to get hidden images
-                // For now, return empty as this is a special case
-                return { data: [], nextCursor: undefined };
+                if (!this.dbHelper) {
+                    logger_1.logger.warn('ImageFeedService', 'Hidden images requested but no database provider available');
+                    return { data: [], nextCursor: undefined };
+                }
+                logger_1.logger.imageFeed(`Getting hidden images for user ${currentUserId}`);
+                const hiddenResult = await this.dbHelper.getHiddenImageIds(currentUserId);
+                if (hiddenResult.imageIds.length > 0) {
+                    // Add filter to only show hidden images
+                    filters.push((0, exports.makeMeiliImageSearchFilter)('id', `IN [${hiddenResult.imageIds.join(',')}]`));
+                    logger_1.logger.imageFeed(`Added hidden images filter: ${hiddenResult.imageIds.length} images`);
+                }
+                else {
+                    // User has no hidden images
+                    logger_1.logger.imageFeed('User has no hidden images, returning empty result');
+                    return { data: [], nextCursor: undefined };
+                }
             }
             // Handle followed users
             if (currentUserId && followed) {
-                // This would require a database call to get followed users
-                // For now, return empty as this is a special case
-                return { data: [], nextCursor: undefined };
+                if (!this.dbHelper) {
+                    logger_1.logger.warn('ImageFeedService', 'Followed users requested but no database provider available');
+                    return { data: [], nextCursor: undefined };
+                }
+                logger_1.logger.imageFeed(`Getting followed users for user ${currentUserId}`);
+                const followedResult = await this.dbHelper.getFollowedUserIds(currentUserId);
+                if (followedResult.userIds.length > 0) {
+                    // Add filter to only show content from followed users
+                    filters.push((0, exports.makeMeiliImageSearchFilter)('userId', `IN [${followedResult.userIds.join(',')}]`));
+                    logger_1.logger.imageFeed(`Added followed users filter: ${followedResult.userIds.length} users`);
+                }
+                else {
+                    // User follows no one
+                    logger_1.logger.imageFeed('User follows no one, returning empty result');
+                    return { data: [], nextCursor: undefined };
+                }
             }
             // NSFW Level filtering
             let browsingLevel = inputBrowsingLevel;
@@ -150,7 +193,7 @@ class ImageFeedService {
             // Model and Review filtering - NOT SUPPORTED in Meilisearch version (matches original)
             // Original logs these as "cantProcess" - reviewId, modelId, prioritizedUserIds are not implemented
             if (modelId || reviewId || prioritizedUserIds) {
-                logger_1.logger.warn('ImageFeedService', 'modelId and reviewId filters not supported in Meilisearch version (matches original behavior)');
+                logger_1.logger.warn('ImageFeedService', 'modelId, reviewId, and prioritizedUserIds filters not supported in Meilisearch version (matches original behavior)');
             }
             // Model version filtering
             if (modelVersionId) {
