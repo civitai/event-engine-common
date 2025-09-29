@@ -26,15 +26,15 @@ export interface IClickhouseClient {
 type RedisCommands = {
   hSet: [[key: string, field: string, value: string], number] | [[key: string, fields: Record<string, string>], number];
 
-  hGet: [[key: string, field: string], string | null];
+  hGet: [[key: string, field: string], string | undefined];
   hGetAll: [[key: string], Record<string, string>];
   hIncrBy: [[key: string, field: string, increment: number], number];
   expire: [[key: string, seconds: number], boolean];
-  set: [[key: string, value: string, options?: { EX: number }], 'OK' | null];
-  sendCommand: [[args: string[]], any];
+  set: [[key: string, value: string, options?: any], string | null];
   del: [[keys: string | string[]], number];
-  setNX: [[key: string, value: string, options?: { EX: number }], boolean];
+  setNX: [[key: string, value: string], boolean];
   eval: [[script: string, options: { keys: string[]; arguments: string[] }], any];
+  evalSha: [[sha: string, options: { keys: string[]; arguments: string[] }], any];
 };
 
 // Utility to map commands into client methods
@@ -57,6 +57,7 @@ type ToMulti<T extends Record<string, any>> = {
 
 export interface IRedisClient extends ToClient<RedisCommands> {
   multi(): IRedisMulti;
+  sendCommand?(args:string[]): any;
 }
 
 export interface IRedisMulti extends ToMulti<RedisCommands> {

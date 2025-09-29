@@ -1,4 +1,4 @@
-import { IClickhouseClient, IRedisClient } from '../types/package-stubs';
+import { IClickhouseClient, IRedisClient, IRedisMulti } from '../types/package-stubs';
 import { logger } from './logger';
 
 export class SimpleClickhouse {
@@ -20,7 +20,7 @@ export class SimpleClickhouse {
   private formatSqlType(value: any): string {
     // Catch any dates being passed in as a string
 
-    
+
     if (typeof value === 'string' && (value.endsWith('(Coordinated Universal Time)') || /\.\d{3}Z$/.test(value))) {
       value = new Date(value);
     }
@@ -35,79 +35,103 @@ export class SimpleClickhouse {
   }
 }
 
-const redisHelpers = (redis: IRedisClient) => ({
-  async setNxKeepTtlWithEx(key: string, value: string, ttl: number) {
-    const script = `
-            if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'KEEPTTL') then
-              return redis.call('EXPIRE', KEYS[1], ARGV[2])
-            else
-              return 0
-            end
-          `;
-    const result = await redis.eval(script, { keys: [key], arguments: [value, String(ttl)] });
-    return result === 1;
-  },
-  async hSetEx(key: string, fields: Record<string, string>, ttl: number) {
-    logger.redis(`hSetEx called for key: ${key}, fields: ${Object.keys(fields).length}, ttl: ${ttl}`);
-    try {
-      // Use pipeline instead of multi to avoid potential transaction issues
-      const pipeline = redis.multi();
-      pipeline.hSet(key, fields);
-      pipeline.expire(key, ttl);
-      logger.redis(`Executing hSetEx pipeline for key: ${key}`);
-      const result = await pipeline.exec();
-      logger.redis(`hSetEx completed for key: ${key}`);
-      return result;
-    } catch (error) {
-      logger.error('RedisHelpers', `hSetEx failed for key: ${key}:`, error);
-      // Try alternative approach: separate commands
-      logger.redis(`Trying separate commands for key: ${key}`);
-      try {
-        await redis.hSet(key, fields);
-        await redis.expire(key, ttl);
-        logger.redis(`Separate commands succeeded for key: ${key}`);
-        return [[null, 'OK'], [null, 1]]; // Mimic multi result format
-      } catch (fallbackError) {
-        logger.error('RedisHelpers', `Fallback commands also failed for key: ${key}:`, fallbackError);
-        throw fallbackError;
-      }
+const redisHelpers = (redis: IRedisClient) => {
+  const scripts = {
+    nxWithTtl: `
+      if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'KEEPTTL') then
+        return redis.call('EXPIRE', KEYS[1], ARGV[2])
+      else
+        return 0
+      end
+    `,
+    hIncrIfExists: `
+      if redis.call('EXISTS', KEYS[1]) == 1 then
+        return redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+      else
+        return 0
+      end
+    `,
+  };
+  const scriptShas: Partial<Record<keyof typeof scripts, string>> = {};
+
+  const loadScripts = async () => {
+    for (const [name, script] of Object.entries(scripts)) {
+      const sha = await redis.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
+      if (sha) scriptShas[name as keyof typeof scripts] = sha;
     }
-  },
-  async run<T>(ops: Promise<T>[]) {
-    logger.redis(`run() called with ${ops.length} operations`);
-    try {
-      const results = await Promise.all(ops);
-      logger.redis('run() completed successfully');
-      return results;
-    } catch (error) {
-      logger.error('RedisHelpers', 'run() failed:', error);
-      logger.error('RedisHelpers', 'Operations types:', ops.map(op => op.constructor.name));
-      throw error;
+  }
+
+  const addScripts = (redis: IRedisClient | IRedisMulti) => {
+    const executeScript = async (name: keyof typeof scripts, keys: string[], args: string[]) => {
+      const sha = scriptShas[name];
+      if (!sha) return await redis.eval(scripts[name], { keys, arguments: args });
+      else return redis.evalSha(sha, { keys, arguments: args });
     }
-  },
-});
 
-export type RedisWithHelpers = IRedisClient & ReturnType<typeof redisHelpers>;
+    return {
+      async setNxKeepTtlWithEx(key: string, value: string, ttl: number) {
+        const result = await executeScript('nxWithTtl', [key], [value, String(ttl)]);
+        return result === 1;
+      },
+      async hIncrIfExists(key: string, field: string, incrBy = 1) {
+        const result = await executeScript('hIncrIfExists', [key], [field, incrBy.toString()]);
+        return result !== 0;
+      },
+    }
+  }
 
-export function withRedisHelpers(redis: IRedisClient): RedisWithHelpers {
-  const helpers = redisHelpers(redis);
-  logger.redis('Creating proxy for Redis client');
-  logger.redis('Original client type:', typeof redis);
-  logger.redis('Helpers:', Object.keys(helpers));
+  const helpers = {
+    async hSetEx(key: string, fields: Record<string, string>, ttl: number) {
+      return redis.multi().hSet(key, fields).expire(key, ttl).exec();
+    },
+    async run<T>(ops: Promise<T>[]) {
+      return Promise.all(ops);
+    },
+    ...addScripts(redis),
+  };
 
-  return new Proxy(redis as RedisWithHelpers, {
+  return { ...helpers, loadScripts, addScripts };
+};
+
+export type RedisWithHelpers<TRedis extends IRedisClient = IRedisClient> = Omit<TRedis, 'multi'> &
+  Omit<ReturnType<typeof redisHelpers>, 'addScripts'> & {
+    multi: () => MultiWithHelpers<TRedis>;
+  };
+
+// Extract the return type of TRedis's multi method, or default to IRedisMulti
+type ExtractMultiType<T> = T extends { multi(): infer M } ? M : IRedisMulti;
+
+export type MultiWithHelpers<TRedis extends IRedisClient> = ExtractMultiType<TRedis> & ReturnType<ReturnType<typeof redisHelpers>['addScripts']>;
+
+export function withRedisHelpers<TRedis extends IRedisClient>(redis: TRedis): RedisWithHelpers<TRedis> {
+  const { addScripts, ...helpers } = redisHelpers(redis);
+
+  return new Proxy(redis as unknown as RedisWithHelpers<TRedis>, {
     get(target, prop, receiver) {
-      if (logger.isDebugEnabled) {
-        logger.redis(`Accessing property: ${String(prop)}`);
+      // Return helper functions if available
+      if (prop in helpers) return (helpers as any)[prop];
+
+      // Special handling for multi() to include all helpers in the pipeline
+      if (prop === 'multi') {
+        return (): MultiWithHelpers<TRedis> => {
+          const multi = (target as any).multi() as ExtractMultiType<TRedis>;
+          const scripts = addScripts(multi);
+
+          // Create proxy for multi that includes all available multi helpers
+          return new Proxy(multi, {
+            get(multiTarget, multiProp) {
+              // Check if this is a multi-compatible helper
+              if (multiProp in scripts) return (scripts as any)[multiProp];
+
+              // Return original multi methods
+              const val = Reflect.get(multiTarget, multiProp);
+              return typeof val === 'function' ? val.bind(multiTarget) : val;
+            }
+          }) as MultiWithHelpers<TRedis>;
+        };
       }
 
-      if (prop in helpers) {
-        if (logger.isDebugEnabled) {
-          logger.redis(`Using helper for: ${String(prop)}`);
-        }
-        return (helpers as any)[prop];
-      }
-
+      // Default behavior for other properties
       const val = Reflect.get(target as object, prop, receiver);
       if (typeof val === 'function') {
         if (logger.isDebugEnabled) {
