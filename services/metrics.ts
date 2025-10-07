@@ -170,14 +170,14 @@ export class MetricService {
             }
 
             cacheAndLockOps.push(
-              this.redis.hSetEx(this.getCacheKey(entityType, id), metricsToCache, CACHE_TTL)
+              ...this.redis.hSetEx(this.getCacheKey(entityType, id), metricsToCache, CACHE_TTL)
             );
 
             results[id] = freshData[id];
           } else {
             // Cache not found with MISS_CACHE_TTL
             cacheAndLockOps.push(
-              this.redis.hSetEx(this.getCacheKey(entityType, id), { notFound: '1' }, MISS_CACHE_TTL)
+              ...this.redis.hSetEx(this.getCacheKey(entityType, id), { notFound: '1' }, MISS_CACHE_TTL)
             );
           }
 
