@@ -56,6 +56,7 @@ type ToMulti<T extends Record<string, any>> = {
 
 export interface IRedisClient extends ToClient<RedisCommands> {
   multi(): IRedisMulti;
+  sendCommand?(...args: any[]): any;
 }
 
 export interface IRedisMulti extends ToMulti<RedisCommands> {
