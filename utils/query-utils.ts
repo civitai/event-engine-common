@@ -56,8 +56,17 @@ const redisHelpers = (redis: IRedisClient) => {
 
   const loadScripts = async () => {
     for (const [name, script] of Object.entries(scripts)) {
-      const sha = await redis.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
-      if (sha) scriptShas[name as keyof typeof scripts] = sha;
+      if ('masters' in (redis as any)) {
+        const cluster = redis as any;
+        const masters = cluster.masters ? Object.values(cluster.masters) : [];
+        for (const master of masters as {client: IRedisClient}[]) {
+          const sha = await master.client.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
+          if (sha) scriptShas[name as keyof typeof scripts] = sha;
+        }
+      } else {
+        const sha = await redis.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
+        if (sha) scriptShas[name as keyof typeof scripts] = sha;
+      }
     }
   }
 
