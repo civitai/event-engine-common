@@ -90,11 +90,8 @@ const redisHelpers = (redis: IRedisClient) => {
   }
 
   const helpers = {
-    hSetEx(key: string, fields: Record<string, string>, ttl: number) {
-      return [
-        redis.hSet(key, fields),
-        redis.expire(key, ttl)
-      ]
+    async hSetEx(key: string, fields: Record<string, string>, ttl: number) {
+      return redis.multi().hSet(key, fields).expire(key, ttl).exec();
     },
     async run<T>(ops: Promise<T>[]) {
       return Promise.all(ops);
