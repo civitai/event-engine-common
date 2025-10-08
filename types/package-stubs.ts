@@ -30,7 +30,8 @@ type RedisCommands = {
   hGetAll: [[key: string], Record<string, string>];
   hIncrBy: [[key: string, field: string, increment: number], number];
   expire: [[key: string, seconds: number], number];
-  set: [[key: string, value: string, options?: any], string | null];
+  get: [[key: string], string | null];
+  set: [[key: string, value: string, options?: { NX?: boolean; EX?: number }], string | null];
   del: [[keys: string | string[]], number];
   eval: [[script: string, options: { keys: string[]; arguments: string[] }], any];
   evalSha: [[sha: string, options: { keys: string[]; arguments: string[] }], any];
