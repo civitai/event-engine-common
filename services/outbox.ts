@@ -4,7 +4,8 @@ export enum OutboxEvent {
     PUBLISHED = 'PUBLISHED',
     UNPUBLISHED = 'UNPUBLISHED',
     DELETED = 'DELETED',
-    UPDATED = 'UPDATED'
+    UPDATED = 'UPDATED',
+    TO_SCAN = 'TO_SCAN'
 }
 
 export type OutboxRecord = {
