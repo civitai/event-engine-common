@@ -7,6 +7,7 @@ var OutboxEvent;
     OutboxEvent["UNPUBLISHED"] = "UNPUBLISHED";
     OutboxEvent["DELETED"] = "DELETED";
     OutboxEvent["UPDATED"] = "UPDATED";
+    OutboxEvent["TO_SCAN"] = "TO_SCAN";
 })(OutboxEvent || (exports.OutboxEvent = OutboxEvent = {}));
 class OutboxService {
     constructor(pgClient) {
