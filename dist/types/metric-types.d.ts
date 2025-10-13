@@ -32,11 +32,11 @@ export type CollectionMetrics = {
 };
 export type ImageMetrics = {
     Collection: number;
-    ReactionCry: number;
-    ReactionDislike: number;
-    ReactionHeart: number;
-    ReactionLaugh: number;
-    ReactionLike: number;
+    Cry: number;
+    Dislike: number;
+    Heart: number;
+    Laugh: number;
+    Like: number;
     commentCount: number;
     tippedAmount: number;
     tippedCount: number;
@@ -44,6 +44,9 @@ export type ImageMetrics = {
 export type ModelMetrics = {
     collectedCount: number;
     commentCount: number;
+    downloadCount: number;
+    earnedAmount: number;
+    generationCount: number;
     imageCount: number;
     ratingCount: number;
     thumbsDownCount: number;
@@ -52,6 +55,9 @@ export type ModelMetrics = {
     tippedCount: number;
 };
 export type ModelVersionMetrics = {
+    downloadCount: number;
+    earnedAmount: number;
+    generationCount: number;
     imageCount: number;
     ratingCount: number;
     thumbsDownCount: number;
@@ -121,9 +127,9 @@ export declare const ENTITY_METRIC_TYPES: {
     readonly Bounty: readonly ["benefactorCount", "commentCount", "entryCount", "favoriteCount", "trackCount", "unitAmount"];
     readonly BountyEntry: readonly ["Cry", "Dislike", "Heart", "Laugh", "Like", "unitAmount"];
     readonly Collection: readonly ["contributorCount", "followerCount", "itemCount"];
-    readonly Image: readonly ["Collection", "ReactionCry", "ReactionDislike", "ReactionHeart", "ReactionLaugh", "ReactionLike", "commentCount", "tippedAmount", "tippedCount"];
-    readonly Model: readonly ["collectedCount", "commentCount", "imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount", "tippedAmount", "tippedCount"];
-    readonly ModelVersion: readonly ["imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount"];
+    readonly Image: readonly ["Collection", "Cry", "Dislike", "Heart", "Laugh", "Like", "commentCount", "tippedAmount", "tippedCount"];
+    readonly Model: readonly ["collectedCount", "commentCount", "downloadCount", "earnedAmount", "generationCount", "imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount", "tippedAmount", "tippedCount"];
+    readonly ModelVersion: readonly ["downloadCount", "earnedAmount", "generationCount", "imageCount", "ratingCount", "thumbsDownCount", "thumbsUpCount"];
     readonly Post: readonly ["Cry", "Dislike", "Heart", "Laugh", "Like", "collectedCount", "commentCount", "reactionCount", "tippedAmount", "tippedCount"];
     readonly Tag: readonly ["followerCount", "hiddenCount"];
     readonly User: readonly ["articleCount", "bountyCount", "followerCount", "followingCount", "hiddenCount", "reactionCount", "tippedAmount", "tippedCount", "tipsGivenAmount", "tipsGivenCount"];
@@ -141,3 +147,14 @@ export type EntityMetricMap = {
     Tag: TagMetrics;
     User: UserMetrics;
 };
+export type EntityMetricTypes = typeof ENTITY_METRIC_TYPES;
+export type EntityMetricEvent = {
+    [K in keyof EntityMetricTypes]: {
+        entityType: K;
+        entityId: number;
+        userId: number;
+        metricType: EntityMetricTypes[K][number];
+        metricValue: number;
+        createdAt: Date;
+    };
+}[keyof EntityMetricTypes];

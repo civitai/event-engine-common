@@ -393,10 +393,10 @@ class ImageFeedService {
                 return {
                     ...h,
                     stats: {
-                        likeCountAllTime: match?.ReactionLike ?? 0,
-                        laughCountAllTime: match?.ReactionLaugh ?? 0,
-                        heartCountAllTime: match?.ReactionHeart ?? 0,
-                        cryCountAllTime: match?.ReactionCry ?? 0,
+                        likeCountAllTime: match?.Like ?? 0,
+                        laughCountAllTime: match?.Laugh ?? 0,
+                        heartCountAllTime: match?.Heart ?? 0,
+                        cryCountAllTime: match?.Cry ?? 0,
                         commentCountAllTime: match?.commentCount ?? 0,
                         collectedCountAllTime: match?.Collection ?? 0,
                         tippedAmountCountAllTime: match?.tippedAmount ?? 0,

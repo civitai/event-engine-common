@@ -23,19 +23,21 @@ export interface IClickhouseClient {
 }
 type RedisCommands = {
     hSet: [[key: string, field: string, value: string], number] | [[key: string, fields: Record<string, string>], number];
-    hGet: [[key: string, field: string], string | null];
+    hGet: [[key: string, field: string], string | null | undefined];
     hGetAll: [[key: string], Record<string, string>];
     hIncrBy: [[key: string, field: string, increment: number], number];
-    expire: [[key: string, seconds: number], boolean];
+    expire: [[key: string, seconds: number], number];
+    get: [[key: string], string | null];
     set: [[key: string, value: string, options?: {
-        EX: number;
-    }], 'OK' | null];
-    sendCommand: [[args: string[]], any];
+        NX?: boolean;
+        EX?: number;
+    }], string | null];
     del: [[keys: string | string[]], number];
-    setNX: [[key: string, value: string, options?: {
-        EX: number;
-    }], boolean];
     eval: [[script: string, options: {
+        keys: string[];
+        arguments: string[];
+    }], any];
+    evalSha: [[sha: string, options: {
         keys: string[];
         arguments: string[];
     }], any];
@@ -48,6 +50,7 @@ type ToMulti<T extends Record<string, any>> = {
 };
 export interface IRedisClient extends ToClient<RedisCommands> {
     multi(): IRedisMulti;
+    sendCommand?(...args: any[]): any;
 }
 export interface IRedisMulti extends ToMulti<RedisCommands> {
     exec(): Promise<any[]>;

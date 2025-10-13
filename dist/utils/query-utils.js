@@ -36,76 +36,98 @@ class SimpleClickhouse {
     }
 }
 exports.SimpleClickhouse = SimpleClickhouse;
-const redisHelpers = (redis) => ({
-    async setNxKeepTtlWithEx(key, value, ttl) {
-        const script = `
-            if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'KEEPTTL') then
-              return redis.call('EXPIRE', KEYS[1], ARGV[2])
+const redisHelpers = (redis) => {
+    const scripts = {
+        nxWithTtl: `
+      if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'KEEPTTL') then
+        return redis.call('EXPIRE', KEYS[1], ARGV[2])
+      else
+        return 0
+      end
+    `,
+        hIncrIfExists: `
+      if redis.call('EXISTS', KEYS[1]) == 1 then
+        return redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+      else
+        return 0
+      end
+    `,
+    };
+    const scriptShas = {};
+    const loadScripts = async () => {
+        for (const [name, script] of Object.entries(scripts)) {
+            if ('masters' in redis) {
+                const cluster = redis;
+                const masters = cluster.masters ? Object.values(cluster.masters) : [];
+                for (const master of masters) {
+                    const sha = await master.client.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
+                    if (sha)
+                        scriptShas[name] = sha;
+                }
+            }
+            else {
+                const sha = await redis.sendCommand?.(['SCRIPT', 'LOAD', script.trim()]);
+                if (sha)
+                    scriptShas[name] = sha;
+            }
+        }
+    };
+    const addScripts = (redis) => {
+        const executeScript = async (name, keys, args) => {
+            const sha = scriptShas[name];
+            if (!sha)
+                return await redis.eval(scripts[name], { keys, arguments: args });
             else
-              return 0
-            end
-          `;
-        const result = await redis.eval(script, { keys: [key], arguments: [value, String(ttl)] });
-        return result === 1;
-    },
-    async hSetEx(key, fields, ttl) {
-        logger_1.logger.redis(`hSetEx called for key: ${key}, fields: ${Object.keys(fields).length}, ttl: ${ttl}`);
-        try {
-            // Use pipeline instead of multi to avoid potential transaction issues
-            const pipeline = redis.multi();
-            pipeline.hSet(key, fields);
-            pipeline.expire(key, ttl);
-            logger_1.logger.redis(`Executing hSetEx pipeline for key: ${key}`);
-            const result = await pipeline.exec();
-            logger_1.logger.redis(`hSetEx completed for key: ${key}`);
-            return result;
-        }
-        catch (error) {
-            logger_1.logger.error('RedisHelpers', `hSetEx failed for key: ${key}:`, error);
-            // Try alternative approach: separate commands
-            logger_1.logger.redis(`Trying separate commands for key: ${key}`);
-            try {
-                await redis.hSet(key, fields);
-                await redis.expire(key, ttl);
-                logger_1.logger.redis(`Separate commands succeeded for key: ${key}`);
-                return [[null, 'OK'], [null, 1]]; // Mimic multi result format
-            }
-            catch (fallbackError) {
-                logger_1.logger.error('RedisHelpers', `Fallback commands also failed for key: ${key}:`, fallbackError);
-                throw fallbackError;
-            }
-        }
-    },
-    async run(ops) {
-        logger_1.logger.redis(`run() called with ${ops.length} operations`);
-        try {
-            const results = await Promise.all(ops);
-            logger_1.logger.redis('run() completed successfully');
-            return results;
-        }
-        catch (error) {
-            logger_1.logger.error('RedisHelpers', 'run() failed:', error);
-            logger_1.logger.error('RedisHelpers', 'Operations types:', ops.map(op => op.constructor.name));
-            throw error;
-        }
-    },
-});
+                return redis.evalSha(sha, { keys, arguments: args });
+        };
+        return {
+            async setNxKeepTtlWithEx(key, value, ttl) {
+                const result = await executeScript('nxWithTtl', [key], [value, String(ttl)]);
+                return result === 1;
+            },
+            async hIncrIfExists(key, field, incrBy = 1) {
+                const result = await executeScript('hIncrIfExists', [key], [field, incrBy.toString()]);
+                return result !== 0;
+            },
+        };
+    };
+    const helpers = {
+        async hSetEx(key, fields, ttl) {
+            return redis.multi().hSet(key, fields).expire(key, ttl).exec();
+        },
+        async run(ops) {
+            return Promise.all(ops);
+        },
+        ...addScripts(redis),
+    };
+    return { ...helpers, loadScripts, addScripts };
+};
 function withRedisHelpers(redis) {
-    const helpers = redisHelpers(redis);
-    logger_1.logger.redis('Creating proxy for Redis client');
-    logger_1.logger.redis('Original client type:', typeof redis);
-    logger_1.logger.redis('Helpers:', Object.keys(helpers));
+    const { addScripts, ...helpers } = redisHelpers(redis);
     return new Proxy(redis, {
         get(target, prop, receiver) {
-            if (logger_1.logger.isDebugEnabled) {
-                logger_1.logger.redis(`Accessing property: ${String(prop)}`);
-            }
-            if (prop in helpers) {
-                if (logger_1.logger.isDebugEnabled) {
-                    logger_1.logger.redis(`Using helper for: ${String(prop)}`);
-                }
+            // Return helper functions if available
+            if (prop in helpers)
                 return helpers[prop];
+            // Special handling for multi() to include all helpers in the pipeline
+            if (prop === 'multi') {
+                return () => {
+                    const multi = target.multi();
+                    const scripts = addScripts(multi);
+                    // Create proxy for multi that includes all available multi helpers
+                    return new Proxy(multi, {
+                        get(multiTarget, multiProp) {
+                            // Check if this is a multi-compatible helper
+                            if (multiProp in scripts)
+                                return scripts[multiProp];
+                            // Return original multi methods
+                            const val = Reflect.get(multiTarget, multiProp);
+                            return typeof val === 'function' ? val.bind(multiTarget) : val;
+                        }
+                    });
+                };
             }
+            // Default behavior for other properties
             const val = Reflect.get(target, prop, receiver);
             if (typeof val === 'function') {
                 if (logger_1.logger.isDebugEnabled) {
