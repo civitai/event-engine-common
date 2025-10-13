@@ -12,6 +12,14 @@ import { ImageMetrics } from '../../types/metric-types';
 import { logger } from '../../utils/logger';
 import type { IDatabaseProvider } from '../../types/database';
 import { DatabaseHelper } from '../../types/database';
+import {
+  NsfwLevel,
+  Flags,
+  onlySelectableLevels,
+  snapToInterval,
+  nsfwBrowsingLevelsArray,
+  nsfwBrowsingLevelsFlag
+} from '../../utils/nsfw-utils';
 
 // Helper functions matching the main app
 export const makeMeiliImageSearchFilter = (
@@ -27,42 +35,6 @@ export const makeMeiliImageSearchSort = (
 ): string => {
   return `${field}:${criteria}`;
 };
-
-// NSFW Level constants
-const NsfwLevel = {
-  PG: 1,
-  PG13: 2,
-  R: 4,
-  X: 8,
-  XXX: 16,
-  Blocked: 32,
-} as const;
-
-const nsfwBrowsingLevelsArray = [NsfwLevel.R, NsfwLevel.X, NsfwLevel.XXX, NsfwLevel.Blocked];
-
-// Basic flags utility
-class Flags {
-  static instanceToArray(instance: number): number[] {
-    const result: number[] = [];
-    let bit = 1;
-    while (bit <= instance) {
-      if (instance & bit) result.push(bit);
-      bit <<= 1;
-    }
-    return result;
-  }
-
-  static intersects(a: number, b: number): boolean {
-    return (a & b) !== 0;
-  }
-}
-
-const nsfwBrowsingLevelsFlag = nsfwBrowsingLevelsArray.reduce((acc, level) => acc | level, 0);
-
-function onlySelectableLevels(level: number): number {
-  if (level & NsfwLevel.Blocked) level = level & ~NsfwLevel.Blocked;
-  return level;
-}
 
 export class ImageFeedService {
   private dbHelper?: DatabaseHelper;
@@ -146,7 +118,7 @@ export class ImageFeedService {
       // Build filters array and sorts array
       const filters: string[] = [];
       const sorts: string[] = [];
-      const snappedNow = this.snapToInterval(Date.now());
+      const snappedNow = snapToInterval(Date.now());
 
       // Handle username to userId conversion
       let finalUserId = userId;
@@ -378,7 +350,7 @@ export class ImageFeedService {
         }
 
         filters.push(
-          makeMeiliImageSearchFilter('sortAtUnix', `> ${this.snapToInterval(afterDate.getTime())}`)
+          makeMeiliImageSearchFilter('sortAtUnix', `> ${snapToInterval(afterDate.getTime())}`)
         );
       }
 
@@ -407,9 +379,9 @@ export class ImageFeedService {
         // For entry-based pagination with time-based sorts
         if (entry && (finalSortConfig.field === 'sortAtUnix' || fieldToUse === 'sortAt')) {
           filters.push(
-            makeMeiliImageSearchFilter('sortAtUnix', `<= ${this.snapToInterval(Math.round(entry))}`)
+            makeMeiliImageSearchFilter('sortAtUnix', `<= ${snapToInterval(Math.round(entry))}`)
           );
-          logger.imageFeed(`Added entry filter: sortAtUnix <= ${this.snapToInterval(Math.round(entry))}`);
+          logger.imageFeed(`Added entry filter: sortAtUnix <= ${snapToInterval(Math.round(entry))}`);
         }
       }
 
@@ -539,13 +511,6 @@ export class ImageFeedService {
       logger.error('ImageFeedService', 'Failed to getImageMetrics:', e);
       return {};
     }
-  }
-
-  /**
-   * Snap timestamp to interval (for consistency with existing logic)
-   */
-  private snapToInterval(timestamp: number, interval = 60000): number {
-    return Math.floor(timestamp / interval) * interval;
   }
 
   /**

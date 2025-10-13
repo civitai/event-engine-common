@@ -37,6 +37,7 @@ export interface ModelFeedInput extends BaseFeedInput {
   modelVersionIds?: number[];
   browsingLevel?: number;
   excludedUserIds?: number[];
+  excludedTagIds?: number[];
   collectionTagId?: number;
   availability?: string[];
   disablePoi?: boolean;

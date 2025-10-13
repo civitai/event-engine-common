@@ -105,6 +105,10 @@ class EventEngineLogger {
     this.debug('ImageFeedService', message, ...args);
   }
 
+  modelFeed(message: string, ...args: any[]): void {
+    this.debug('ModelFeedService', message, ...args);
+  }
+
   // Performance timing helpers
   time(component: string, label: string): void {
     if (this.shouldLog(LOG_LEVELS.DEBUG, component)) {

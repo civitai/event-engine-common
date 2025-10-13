@@ -24,6 +24,21 @@ export interface DatabaseImageEngagement {
   type: 'Hide' | 'Favorite';
 }
 
+export interface DatabaseModelEngagement {
+  userId: number;
+  modelId: number;
+  type: 'Hide' | 'Favorite' | 'Notify';
+}
+
+export interface DatabaseTag {
+  id: number;
+  name: string;
+}
+
+export interface DatabaseModel {
+  id: number;
+}
+
 // Database provider interface - apps implement this to provide database access
 export interface IDatabaseProvider {
   // User-related queries
@@ -34,6 +49,15 @@ export interface IDatabaseProvider {
 
   // Image engagement queries
   findImageEngagements(userId: number, type: 'Hide'): Promise<DatabaseImageEngagement[]>;
+
+  // Model engagement queries
+  findModelEngagements(userId: number, type: 'Hide'): Promise<DatabaseModelEngagement[]>;
+
+  // Tag queries
+  findTagByName(name: string): Promise<DatabaseTag | null>;
+
+  // Model existence checks
+  checkModelsExist(modelIds: number[]): Promise<DatabaseModel[]>;
 }
 
 
@@ -48,6 +72,18 @@ export interface HiddenImagesResult {
 
 export interface FollowedUsersResult {
   userIds: number[];
+}
+
+export interface HiddenModelsResult {
+  modelIds: number[];
+}
+
+export interface TagIdResult {
+  tagId: number | null;
+}
+
+export interface ModelsExistResult {
+  existingIds: number[];
 }
 
 // Helper class that provides common database operations using the provider
@@ -85,6 +121,38 @@ export class DatabaseHelper {
     } catch (error) {
       console.error('DatabaseHelper: Error finding followed users:', error);
       return { userIds: [] };
+    }
+  }
+
+  async getHiddenModelIds(userId: number): Promise<HiddenModelsResult> {
+    try {
+      const engagements = await this.provider.findModelEngagements(userId, 'Hide');
+      const modelIds = engagements.map(e => e.modelId);
+      return { modelIds };
+    } catch (error) {
+      console.error('DatabaseHelper: Error finding hidden models:', error);
+      return { modelIds: [] };
+    }
+  }
+
+  async getTagIdFromName(name: string): Promise<TagIdResult> {
+    try {
+      const tag = await this.provider.findTagByName(name);
+      return { tagId: tag?.id ?? null };
+    } catch (error) {
+      console.error('DatabaseHelper: Error finding tag by name:', error);
+      return { tagId: null };
+    }
+  }
+
+  async checkModelsExist(modelIds: number[]): Promise<ModelsExistResult> {
+    try {
+      const models = await this.provider.checkModelsExist(modelIds);
+      const existingIds = models.map(m => m.id);
+      return { existingIds };
+    } catch (error) {
+      console.error('DatabaseHelper: Error checking models exist:', error);
+      return { existingIds: [] };
     }
   }
 
