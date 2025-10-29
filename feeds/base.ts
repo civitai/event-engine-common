@@ -15,16 +15,6 @@ import {
   FeedSchema,
 } from './types';
 
-// Helper types to extract generics from config for proper type inference
-type ExtractEntityType<T> = T extends CreateFeedConfig<infer E, any, any, any, any> ? E : never;
-type ExtractInputType<T> = T extends CreateFeedConfig<any, infer TInput, any, any, any>
-  ? TInput
-  : never;
-type ExtractDocument<T> = T extends CreateFeedConfig<any, any, any, infer TDoc, any> ? TDoc : never;
-type ExtractPopulated<T> = T extends CreateFeedConfig<any, any, any, any, infer TPop>
-  ? TPop
-  : never;
-
 /**
  * Creates a feed class with typed access to Meilisearch, caches, and metrics
  *
@@ -38,9 +28,16 @@ type ExtractPopulated<T> = T extends CreateFeedConfig<any, any, any, any, infer 
  * @param config - Feed configuration
  * @returns Feed class constructor
  */
-export function createFeed<const TConfig extends CreateFeedConfig<EntityType, any, any, any, any>>(
-  config: TConfig
+export function createFeed<
+  E extends EntityType,
+  TInput extends Record<string, any>,
+  TSchema extends FeedSchema,
+  TDoc,
+  TPop
+>(
+  config: CreateFeedConfig<E, TInput, TSchema, TDoc, TPop>
 ) {
+
   const options: FeedAdvancedOptions = {
     fetchBatchSize: 1000,
     upsertBatchSize: 100000,
@@ -50,7 +47,7 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
 
   class Feed {
     private client: IMeilisearch;
-    private context!: FeedContext<ExtractEntityType<TConfig>>;
+    private context!: FeedContext<E>;
     private index: IMeilisearchIndex | undefined;
     private indexError: Error | undefined;
     private indexReady: Promise<boolean>;
@@ -141,7 +138,7 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
           limit: 20,
           cursor: undefined,
         },
-      } as FeedContext<ExtractEntityType<TConfig>>;
+      } as FeedContext<E>;
     }
 
     /**
@@ -172,7 +169,7 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
     async upsert(ids: number[], type: UpsertType = 'full'): Promise<void> {
       await this.ready();
 
-      const batcher = createAsyncBatcher<ExtractDocument<TConfig>>(
+      const batcher = createAsyncBatcher<TDoc>(
         options.upsertBatchSize,
         async (docs) => {
           await this.index!.updateDocuments(docs as Record<string, any>[]);
@@ -195,14 +192,14 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
      * Input and return types are inferred from config
      * Pagination (limit, cursor) is extracted and passed via context
      */
-    async query(input: FeedQueryInput<ExtractInputType<TConfig>>): Promise<ExtractDocument<TConfig>[]> {
+    async query(input: FeedQueryInput<TInput>): Promise<TDoc[]> {
       await this.ready();
 
       // Extract pagination from input
       const { limit = 20, cursor, ...customInput } = input;
 
       // Create context with pagination
-      const ctxWithPagination: FeedContext<ExtractEntityType<TConfig>> = {
+      const ctxWithPagination: FeedContext<E> = {
         ...this.context,
         pagination: { limit, cursor },
       };
@@ -210,7 +207,7 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
       // Pass custom input (without pagination) to queryDocuments
       const docs = await config.queryDocuments(
         ctxWithPagination,
-        customInput as ExtractInputType<TConfig>
+        customInput as TInput
       );
       return docs;
     }
@@ -219,7 +216,7 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
      * Populate documents with related data
      * Document and return types are inferred from config
      */
-    async populate(docs: ExtractDocument<TConfig>[]): Promise<ExtractPopulated<TConfig>[]> {
+    async populate(docs: TDoc[]): Promise<TPop[]> {
       await this.ready();
       const populatedDocs = await config.populateDocuments(this.context, docs);
       return populatedDocs;
@@ -231,8 +228,8 @@ export function createFeed<const TConfig extends CreateFeedConfig<EntityType, an
      * All types are inferred from config
      */
     async populatedQuery(
-      input: FeedQueryInput<ExtractInputType<TConfig>>
-    ): Promise<ExtractPopulated<TConfig>[]> {
+      input: FeedQueryInput<TInput>
+    ): Promise<TPop[]> {
       const docs = await this.query(input);
       return await this.populate(docs);
     }

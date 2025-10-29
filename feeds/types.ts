@@ -116,16 +116,13 @@ export type CreateFeedConfig<
     apiKey: string;
   };
   schema: TSchema;
-  // Create flat documents for Meilisearch from entity IDs
   createDocuments: (
     ctx: FeedContext<E>,
     ids: number[],
     type?: UpsertType
   ) => Promise<TDocument[]>;
-  // Query documents from Meilisearch
-  // Pagination (limit, cursor) is provided via ctx.pagination
   queryDocuments: (ctx: FeedContext<E>, input: TInput) => Promise<TDocument[]>;
-  // Populate documents with related data for API response
+  // This is the key - TDocument flows from above methods to here
   populateDocuments: (ctx: FeedContext<E>, documents: TDocument[]) => Promise<TPopulated[]>;
   options?: Partial<FeedAdvancedOptions>;
 };
