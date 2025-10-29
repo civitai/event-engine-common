@@ -285,17 +285,17 @@ export class MetricService {
       try {
         logger.clickhouse(`Executing ClickHouse query for batch ${batchIndex + 1}`);
         rawMetrics = await this.ch.query<{ entityId: number; metricType: string; value: number }>`
-                SELECT
-                    entityId,
-                    metricType,
-                    sum(metricValue) as value
-                FROM entityMetricEvents
-                WHERE entityType = '${entityType}'
-                    AND entityId IN (${batch})
-                    AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map(v => `'${v}'`).join(',')})
-                GROUP BY entityId, metricType
-                HAVING value > 0
-            `;
+          SELECT
+            entityId,
+            metricType,
+            sum(total) AS value
+          FROM entityMetricDailyAgg
+          WHERE entityType = ${entityType}
+            AND entityId IN (${batch})
+            AND metricType IN (${ENTITY_METRIC_TYPES[entityType]})
+          GROUP BY entityId, metricType
+          HAVING value > 0;
+        `;
         const batchTime = Date.now() - batchStartTime;
         logger.clickhouse(`ClickHouse query completed for batch ${batchIndex + 1} in ${batchTime}ms, got ${rawMetrics.length} rows`);
       } catch (error) {

@@ -9,6 +9,30 @@ export interface IPgClient {
   }>;
 }
 
+/**
+ * ResponseJSON type from ClickHouse client
+ * Used for single-document JSON formats
+ */
+export interface ResponseJSON<T> {
+  data: T[];
+  meta?: Array<{ name: string; type: string }>;
+  rows?: number;
+  statistics?: {
+    elapsed: number;
+    rows_read: number;
+    bytes_read: number;
+  };
+}
+
+/**
+ * ClickHouse client interface
+ * Compatible with @clickhouse/client
+ *
+ * Note: The json<T>() return type is a union because it depends on the format parameter:
+ * - JSONEachRow format: returns T[]
+ * - JSON format: returns ResponseJSON<T>
+ * - JSONObjectEachRow format: returns Record<string, T>
+ */
 export interface IClickhouseClient {
   query(params: {
     query: string;
@@ -18,7 +42,11 @@ export interface IClickhouseClient {
     abort_signal?: AbortSignal;
     query_id?: string;
     session_id?: string;
-  }): Promise<{ json<T>(): Promise<T> }>;
+  }): Promise<{
+    json<T>(): Promise<T[] | Record<string, T> | ResponseJSON<T>>;
+    text(): Promise<string>;
+    stream(): any;
+  }>;
 }
 
 // Define each command as [args, returnType]
@@ -63,4 +91,13 @@ export interface IRedisClient extends ToClient<RedisCommands> {
 export interface IRedisMulti extends ToMulti<RedisCommands> {
   exec(): Promise<any[]>;
 }
+
+// Data packer for binary serialization (e.g., msgpackr)
+export interface IDataPacker {
+  pack: (value: any) => Buffer;
+  unpack: (packed: Buffer | Uint8Array) => any;
+}
+
+// Alias for PostgreSQL client
+export type IDbClient = IPgClient;
 

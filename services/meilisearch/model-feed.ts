@@ -401,8 +401,10 @@ export class ModelFeedService {
       });
 
       logger.modelFeed('Executing Meilisearch query...');
-      const searchResponse: SearchResponse<ModelRawItem> =
-        await index.search(null, searchOptions); // Use null instead of empty string
+      // const searchResponse: SearchResponse<ModelRawItem> =
+      //   await index.search(null, searchOptions); // Use null instead of empty string
+      const searchResponse =
+        await index.search<ModelRawItem>(null, searchOptions); // Use null instead of empty string
 
       const hits = searchResponse.hits || [];
       logger.modelFeed(`Meilisearch returned ${hits.length} hits, took ${searchResponse.processingTimeMs}ms`);

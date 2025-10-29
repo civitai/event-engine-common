@@ -152,6 +152,7 @@ export class ImageFeedService {
           return { data: [], nextCursor: undefined };
         }
         logger.imageFeed(`Getting hidden images for user ${currentUserId}`);
+        const hiddenResults = await ctx.pg.query(``)
         const hiddenResult = await this.dbHelper.getHiddenImageIds(currentUserId);
         if (hiddenResult.imageIds.length > 0) {
           filters.push(makeMeiliImageSearchFilter('id', `IN [${hiddenResult.imageIds.join(',')}]`));
