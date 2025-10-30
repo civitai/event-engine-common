@@ -11,6 +11,7 @@ import {
   FeedContext,
   FeedAdvancedOptions,
   FeedQueryInput,
+  FeedResult,
   UpsertType,
   FeedSchema,
 } from './types';
@@ -62,15 +63,21 @@ export function createFeed<
       this.client = meilisearch;
 
       // Initialize index and configure settings
+      console.log(`[Feed:${config.name}] Initializing feed...`);
+      const initStart = Date.now();
+
       this.indexReady = getMeilisearchFeed({
         client: this.client,
         name: config.name,
       })
         .then(async (index) => {
           this.index = index;
+          console.log(`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
 
           // Get current settings to avoid unnecessary updates
+          const settingsStart = Date.now();
           const currentSettings = await index.getSettings();
+          console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
 
           // Configure index based on schema
           const sortable: string[] = [];
@@ -89,15 +96,43 @@ export function createFeed<
             JSON.stringify(filterable.sort()) !==
             JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
 
-          if (sortableChanged && sortable.length) await index.updateSortableAttributes(sortable);
-          if (filterableChanged && filterable.length)
-            await index.updateFilterableAttributes(filterable);
+          console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
+          console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
 
+          // Queue attribute updates without waiting for them to complete
+          // This prevents blocking on large indexes where updates can take time
+          const updatePromises: Promise<unknown>[] = [];
+
+          if (sortableChanged && sortable.length) {
+            console.log(`[Feed:${config.name}] Queueing sortable attributes update`);
+            updatePromises.push(
+              index.updateSortableAttributes(sortable)
+                .then(() => console.log(`[Feed:${config.name}] Sortable attributes update queued successfully`))
+                .catch((err) => console.error(`[Feed:${config.name}] Failed to update sortable attributes:`, err))
+            );
+          }
+          if (filterableChanged && filterable.length) {
+            console.log(`[Feed:${config.name}] Queueing filterable attributes update`);
+            updatePromises.push(
+              index.updateFilterableAttributes(filterable)
+                .then(() => console.log(`[Feed:${config.name}] Filterable attributes update queued successfully`))
+                .catch((err) => console.error(`[Feed:${config.name}] Failed to update filterable attributes:`, err))
+            );
+          }
+
+          // Fire off updates in the background, don't wait for them
+          if (updatePromises.length > 0) {
+            Promise.all(updatePromises).catch(() => {
+              // Swallow errors - we already logged them above
+            });
+          }
+
+          console.log(`[Feed:${config.name}] Initialization complete in ${Date.now() - initStart}ms (attribute updates queued in background)`);
           return true;
         })
         .catch((err) => {
           this.indexError = err as Error;
-          console.error(`Failed to initialize feed ${config.name}:`, err);
+          console.error(`[Feed:${config.name}] Failed to initialize:`, err);
           return false;
         });
 
@@ -191,8 +226,12 @@ export function createFeed<
      * Query documents from Meilisearch
      * Input and return types are inferred from config
      * Pagination (limit, cursor) is extracted and passed via context
+     * Returns data array and next cursor for pagination
      */
-    async query(input: FeedQueryInput<TInput>): Promise<TDoc[]> {
+    async query(input: FeedQueryInput<TInput>): Promise<FeedResult<TDoc>> {
+      console.log(`[Feed:${config.name}] Query started with input:`, JSON.stringify(input, null, 2));
+      const queryStart = Date.now();
+
       await this.ready();
 
       // Extract pagination from input
@@ -209,7 +248,33 @@ export function createFeed<
         ctxWithPagination,
         customInput as TInput
       );
-      return docs;
+
+      // Extract cursor if we have more results than requested
+      let nextCursor: string | undefined;
+      let data: TDoc[];
+
+      if (docs.length > limit) {
+        // We have more results, extract cursor from the last item we'll return
+        data = docs.slice(0, limit);
+        const lastItem = data[limit - 1] as Record<string, unknown>;
+
+        // Generate cursor from document if getCursor function is provided
+        if (config.getCursor) {
+          nextCursor = config.getCursor(lastItem as TDoc);
+        } else {
+          // Default cursor format: sortAt:id or just id
+          const sortAt = lastItem.sortAt;
+          const id = lastItem.id;
+          nextCursor = sortAt ? `${sortAt}:${id}` : String(id);
+        }
+      } else {
+        // No more results
+        data = docs;
+        nextCursor = undefined;
+      }
+
+      console.log(`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
+      return { data, nextCursor };
     }
 
     /**
@@ -217,8 +282,13 @@ export function createFeed<
      * Document and return types are inferred from config
      */
     async populate(docs: TDoc[]): Promise<TPop[]> {
+      console.log(`[Feed:${config.name}] Populate started with ${docs.length} documents`);
+      const populateStart = Date.now();
+
       await this.ready();
       const populatedDocs = await config.populateDocuments(this.context, docs);
+
+      console.log(`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);
       return populatedDocs;
     }
 
@@ -226,12 +296,14 @@ export function createFeed<
      * Query and populate in one call
      * Convenience method for common use case
      * All types are inferred from config
+     * Returns populated data and cursor for pagination
      */
     async populatedQuery(
       input: FeedQueryInput<TInput>
-    ): Promise<TPop[]> {
-      const docs = await this.query(input);
-      return await this.populate(docs);
+    ): Promise<FeedResult<TPop>> {
+      const { data, nextCursor } = await this.query(input);
+      const populated = await this.populate(data);
+      return { data: populated, nextCursor };
     }
   }
 

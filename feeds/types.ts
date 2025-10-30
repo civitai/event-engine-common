@@ -39,6 +39,15 @@ export type FeedQueryInput<T extends Record<string, any>> = {
 } & T;
 
 /**
+ * Result from feed queries
+ * Contains data and cursor for pagination
+ */
+export type FeedResult<T> = {
+  data: T[];
+  nextCursor?: string;
+};
+
+/**
  * Advanced configuration options for feeds
  */
 export type FeedAdvancedOptions = {
@@ -111,7 +120,7 @@ export type CreateFeedConfig<
 > = {
   entityType: E;
   name: string;
-  connection: {
+  connection?: {
     host: string;
     apiKey: string;
   };
@@ -124,5 +133,10 @@ export type CreateFeedConfig<
   queryDocuments: (ctx: FeedContext<E>, input: TInput) => Promise<TDocument[]>;
   // This is the key - TDocument flows from above methods to here
   populateDocuments: (ctx: FeedContext<E>, documents: TDocument[]) => Promise<TPopulated[]>;
+  /**
+   * Optional function to extract cursor from a document
+   * If not provided, uses default format: sortAt:id or just id
+   */
+  getCursor?: (doc: TDocument) => string;
   options?: Partial<FeedAdvancedOptions>;
 };

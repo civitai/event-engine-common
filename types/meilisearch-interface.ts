@@ -21,13 +21,14 @@ export type MeilisearchTaskStatus =
 /**
  * Enqueued task returned by methods that queue operations
  * This matches the EnqueuedTask type from meilisearch library
+ * Note: Timestamps are Date objects in the actual library
  */
 export type MeilisearchTask = {
   taskUid: number;
   indexUid?: string | null;
   status: MeilisearchTaskStatus;
   type?: string;
-  enqueuedAt: string;
+  enqueuedAt: Date | string; // Library uses Date, some serialized versions use string
 };
 
 /**
@@ -40,14 +41,14 @@ export type MeilisearchFullTask = {
   indexUid?: string | null;
   status: MeilisearchTaskStatus;
   type?: string;
-  enqueuedAt: string;
+  enqueuedAt: Date | string;
   batchUid?: number | null;
   canceledBy?: number | null;
-  details?: Record<string, any>;
-  error?: any | null;
+  details?: Record<string, unknown>;
+  error?: unknown;
   duration?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
+  startedAt?: Date | string | null;
+  finishedAt?: Date | string | null;
 };
 
 /**
@@ -55,15 +56,15 @@ export type MeilisearchFullTask = {
  * Note: Using flexible types to match the actual Meilisearch library types
  */
 export type MeilisearchSettings = {
-  filterableAttributes?: any[] | null; // Can include GranularFilterableAttribute
+  filterableAttributes?: string[] | null;
   sortableAttributes?: string[] | null;
   searchableAttributes?: string[] | null;
   displayedAttributes?: string[] | null;
   rankingRules?: string[] | null;
   stopWords?: string[] | null;
-  synonyms?: Record<string, any> | null;
+  synonyms?: Record<string, string[]> | null;
   distinctAttribute?: string | null;
-  [key: string]: any; // Allow additional properties
+  [key: string]: unknown; // Allow additional properties
 };
 
 export type MeilisearchSearchOptions = {
@@ -80,26 +81,26 @@ export type MeilisearchSearchOptions = {
  * Hit type returned in search results
  * The actual library adds metadata fields to documents
  */
-export type MeilisearchHit<T = Record<string, any>> = T & {
+export type MeilisearchHit<T = Record<string, unknown>> = T & {
   _formatted?: Partial<T>;
-  _matchesPosition?: any;
+  _matchesPosition?: unknown;
   _rankingScore?: number;
-  _rankingScoreDetails?: any;
-  _geo?: any;
+  _rankingScoreDetails?: unknown;
+  _geo?: unknown;
 };
 
 /**
  * Search result type
  * Compatible with SearchResponse from meilisearch library
  */
-export type MeilisearchSearchResult<T = Record<string, any>> = {
+export type MeilisearchSearchResult<T = Record<string, unknown>> = {
   hits: MeilisearchHit<T>[];
   estimatedTotalHits?: number;
   offset?: number;
   limit?: number;
   processingTimeMs?: number;
   query?: string;
-  [key: string]: any; // Allow additional properties
+  [key: string]: unknown; // Allow additional properties
 };
 
 export interface IMeilisearchIndex {
@@ -136,7 +137,10 @@ export interface IMeilisearchIndex {
   /**
    * Update documents in the index
    */
-  updateDocuments(documents: Array<Record<string, any>>, options?: { primaryKey?: string }): Promise<MeilisearchTask>;
+  updateDocuments(
+    documents: Array<Record<string, unknown>>,
+    options?: { primaryKey?: string }
+  ): Promise<MeilisearchTask>;
 
   /**
    * Delete documents by IDs
@@ -145,12 +149,12 @@ export interface IMeilisearchIndex {
 
   /**
    * Search documents
-   * Note: Using flexible return type for compatibility
+   * Returns search results with hits matching the document type
    */
-  search<T = Record<string, any>>(
+  search<T = Record<string, unknown>>(
     query: string | null,
     options?: MeilisearchSearchOptions
-  ): Promise<any>; // Use any for maximum compatibility
+  ): Promise<MeilisearchSearchResult<T>>;
 }
 
 export interface IMeilisearch {

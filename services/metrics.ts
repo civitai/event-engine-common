@@ -290,9 +290,9 @@ export class MetricService {
             metricType,
             sum(total) AS value
           FROM entityMetricDailyAgg
-          WHERE entityType = ${entityType}
+          WHERE entityType = '${entityType}'
             AND entityId IN (${batch})
-            AND metricType IN (${ENTITY_METRIC_TYPES[entityType]})
+            AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
           GROUP BY entityId, metricType
           HAVING value > 0;
         `;
@@ -355,9 +355,9 @@ export class MetricService {
             sumIf(total, day >= subtractYears(today(), 1))  AS Year,
             sum(total) AS AllTime
           FROM entityMetricDailyAgg
-          WHERE entityType = ${entityType}
+          WHERE entityType = '${entityType}'
             AND entityId IN (${batch})
-            AND metricType IN (${ENTITY_METRIC_TYPES[entityType]})
+            AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
           GROUP BY entityId, metricType
         `;
         const batchTime = Date.now() - batchStartTime;

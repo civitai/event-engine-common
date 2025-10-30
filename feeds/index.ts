@@ -3,13 +3,16 @@
  * Import with: import * as feeds from '../common/feeds'
  */
 
-export { ImageFeed } from './image.feed';
+export { ImagesFeed } from './images.feed';
+// The simple example has been replaced with the full implementation
+
 // Add other feeds as needed (ModelFeed, PostFeed, etc.)
 
 // Export types
 export type {
   FeedContext,
   FeedQueryInput,
+  FeedResult,
   FeedAdvancedOptions,
   UpsertType,
   SchemaFieldType,
