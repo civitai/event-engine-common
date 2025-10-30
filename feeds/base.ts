@@ -52,6 +52,7 @@ export function createFeed<
     private index: IMeilisearchIndex | undefined;
     private indexError: Error | undefined;
     private indexReady: Promise<boolean>;
+    private configured = false;
 
     constructor(
       meilisearch: IMeilisearch,
@@ -62,77 +63,19 @@ export function createFeed<
     ) {
       this.client = meilisearch;
 
-      // Initialize index and configure settings
-      console.log(`[Feed:${config.name}] Initializing feed...`);
+      // Read-only initialization: just get the index reference
+      console.log(`[Feed:${config.name}] Initializing feed (read-only)...`);
       const initStart = Date.now();
 
-      this.indexReady = getMeilisearchFeed({
-        client: this.client,
-        name: config.name,
-      })
-        .then(async (index) => {
+      this.indexReady = this.client.getIndex(config.name)
+        .then((index) => {
           this.index = index;
           console.log(`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
-
-          // Get current settings to avoid unnecessary updates
-          const settingsStart = Date.now();
-          const currentSettings = await index.getSettings();
-          console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
-
-          // Configure index based on schema
-          const sortable: string[] = [];
-          const filterable: string[] = [];
-
-          for (const [field, fieldConfig] of Object.entries(config.schema) as [string, { sortable?: boolean; filterable?: boolean }][]) {
-            if (fieldConfig.sortable) sortable.push(field);
-            if (fieldConfig.filterable) filterable.push(field);
-          }
-
-          // Only update if changed to avoid hammering Meilisearch
-          const sortableChanged =
-            JSON.stringify(sortable.sort()) !==
-            JSON.stringify((currentSettings.sortableAttributes ?? []).sort());
-          const filterableChanged =
-            JSON.stringify(filterable.sort()) !==
-            JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
-
-          console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
-          console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
-
-          // Queue attribute updates without waiting for them to complete
-          // This prevents blocking on large indexes where updates can take time
-          const updatePromises: Promise<unknown>[] = [];
-
-          if (sortableChanged && sortable.length) {
-            console.log(`[Feed:${config.name}] Queueing sortable attributes update`);
-            updatePromises.push(
-              index.updateSortableAttributes(sortable)
-                .then(() => console.log(`[Feed:${config.name}] Sortable attributes update queued successfully`))
-                .catch((err) => console.error(`[Feed:${config.name}] Failed to update sortable attributes:`, err))
-            );
-          }
-          if (filterableChanged && filterable.length) {
-            console.log(`[Feed:${config.name}] Queueing filterable attributes update`);
-            updatePromises.push(
-              index.updateFilterableAttributes(filterable)
-                .then(() => console.log(`[Feed:${config.name}] Filterable attributes update queued successfully`))
-                .catch((err) => console.error(`[Feed:${config.name}] Failed to update filterable attributes:`, err))
-            );
-          }
-
-          // Fire off updates in the background, don't wait for them
-          if (updatePromises.length > 0) {
-            Promise.all(updatePromises).catch(() => {
-              // Swallow errors - we already logged them above
-            });
-          }
-
-          console.log(`[Feed:${config.name}] Initialization complete in ${Date.now() - initStart}ms (attribute updates queued in background)`);
           return true;
         })
         .catch((err) => {
           this.indexError = err as Error;
-          console.error(`[Feed:${config.name}] Failed to initialize:`, err);
+          console.error(`[Feed:${config.name}] Failed to get index:`, err);
           return false;
         });
 
@@ -186,10 +129,83 @@ export function createFeed<
     }
 
     /**
+     * Configure index for write operations
+     * Creates index if it doesn't exist and updates schema settings
+     * This is called automatically by upsert() and delete()
+     * Safe to call multiple times (idempotent)
+     */
+    async configure(): Promise<void> {
+      if (this.configured) return; // Already configured
+
+      console.log(`[Feed:${config.name}] Configuring index for write operations...`);
+      const configStart = Date.now();
+
+      // Ensure we can access the index
+      await this.ready();
+
+      // Try to create index if it doesn't exist
+      try {
+        this.index = await this.client.getIndex(config.name);
+      } catch (e: any) {
+        if (e.code === 'index_not_found') {
+          console.log(`[Feed:${config.name}] Index not found, creating...`);
+          const task = await this.client.createIndex(config.name, { primaryKey: 'id' });
+          await this.client.tasks.waitForTask(task.taskUid);
+          this.index = await this.client.getIndex(config.name);
+          console.log(`[Feed:${config.name}] Index created successfully`);
+        } else {
+          throw e;
+        }
+      }
+
+      // Get current settings to avoid unnecessary updates
+      const settingsStart = Date.now();
+      const currentSettings = await this.index.getSettings();
+      console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
+
+      // Configure index based on schema
+      const sortable: string[] = [];
+      const filterable: string[] = [];
+
+      for (const [field, fieldConfig] of Object.entries(config.schema) as [string, { sortable?: boolean; filterable?: boolean }][]) {
+        if (fieldConfig.sortable) sortable.push(field);
+        if (fieldConfig.filterable) filterable.push(field);
+      }
+
+      // Only update if changed to avoid hammering Meilisearch
+      const sortableChanged =
+        JSON.stringify(sortable.sort()) !==
+        JSON.stringify((currentSettings.sortableAttributes ?? []).sort());
+      const filterableChanged =
+        JSON.stringify(filterable.sort()) !==
+        JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
+
+      console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
+      console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
+
+      // Update attributes synchronously to ensure they're set before writes
+      if (sortableChanged && sortable.length) {
+        console.log(`[Feed:${config.name}] Updating sortable attributes`);
+        const task = await this.index.updateSortableAttributes(sortable);
+        await this.client.tasks.waitForTask(task.taskUid);
+        console.log(`[Feed:${config.name}] Sortable attributes updated successfully`);
+      }
+      if (filterableChanged && filterable.length) {
+        console.log(`[Feed:${config.name}] Updating filterable attributes`);
+        const task = await this.index.updateFilterableAttributes(filterable);
+        await this.client.tasks.waitForTask(task.taskUid);
+        console.log(`[Feed:${config.name}] Filterable attributes updated successfully`);
+      }
+
+      this.configured = true;
+      console.log(`[Feed:${config.name}] Configuration complete in ${Date.now() - configStart}ms`);
+    }
+
+    /**
      * Delete documents from the index
      */
     async delete(ids: number[]): Promise<void> {
-      await this.ready();
+      await this.configure(); // Ensure index is configured for write operations
       const task = await this.index!.deleteDocuments(ids);
       // Task is queued, we don't wait for completion
     }
@@ -202,7 +218,7 @@ export function createFeed<
      * @param type - Type of update ('full' or 'metrics')
      */
     async upsert(ids: number[], type: UpsertType = 'full'): Promise<void> {
-      await this.ready();
+      await this.configure(); // Ensure index is configured for write operations
 
       const batcher = createAsyncBatcher<TDoc>(
         options.upsertBatchSize,
