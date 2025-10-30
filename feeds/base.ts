@@ -253,10 +253,30 @@ export function createFeed<
       // Extract pagination from input
       const { limit = 20, cursor, ...customInput } = input;
 
+      // Parse cursor to extract offset
+      // Cursor format: "offset|timestamp" e.g., "100|1724677401898"
+      let offset = 0;
+      let entry: string | undefined;
+
+      if (cursor) {
+        const parts = cursor.split('|');
+        if (parts.length === 2) {
+          offset = parseInt(parts[0]) || 0;
+          entry = parts[1];
+          console.log(`[Feed:${config.name}] Parsed cursor: offset=${offset}, entry=${entry}`);
+        } else if (parts.length === 1) {
+          // Fallback: if cursor is just a number, treat it as offset
+          offset = parseInt(parts[0]) || 0;
+          console.log(`[Feed:${config.name}] Parsed cursor as offset only: ${offset}`);
+        } else {
+          console.warn(`[Feed:${config.name}] Invalid cursor format, expected 'offset|timestamp', got:`, cursor);
+        }
+      }
+
       // Create context with pagination
       const ctxWithPagination: FeedContext<E> = {
         ...this.context,
-        pagination: { limit, cursor },
+        pagination: { limit, cursor, offset },
       };
 
       // Pass custom input (without pagination) to queryDocuments
@@ -274,19 +294,30 @@ export function createFeed<
         data = docs.slice(0, limit);
         const lastItem = data[limit - 1] as Record<string, unknown>;
 
-        // Generate cursor from document if getCursor function is provided
+        console.log(`[Feed:${config.name}] More results available (${docs.length} > ${limit}), generating cursor from last returned item`);
+
+        // Calculate new offset for next page
+        const newOffset = offset + limit;
+
+        // Get timestamp from last item using getCursor or default to sortAtUnix
+        let timestamp: string | number;
         if (config.getCursor) {
-          nextCursor = config.getCursor(lastItem as TDoc);
+          timestamp = config.getCursor(lastItem as TDoc);
+          console.log(`[Feed:${config.name}] Got timestamp from getCursor():`, timestamp);
         } else {
-          // Default cursor format: sortAt:id or just id
-          const sortAt = lastItem.sortAt;
-          const id = lastItem.id;
-          nextCursor = sortAt ? `${sortAt}:${id}` : String(id);
+          // Default: use sortAtUnix or sortAt or id
+          timestamp = (lastItem.sortAtUnix as number) || (lastItem.sortAt as number) || (lastItem.id as number);
+          console.log(`[Feed:${config.name}] Using default timestamp:`, timestamp);
         }
+
+        // Generate cursor in format "offset|timestamp"
+        nextCursor = `${newOffset}|${timestamp}`;
+        console.log(`[Feed:${config.name}] Generated cursor:`, nextCursor);
       } else {
         // No more results
         data = docs;
         nextCursor = undefined;
+        console.log(`[Feed:${config.name}] No more results available (${docs.length} <= ${limit}), no cursor generated`);
       }
 
       console.log(`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
@@ -296,13 +327,14 @@ export function createFeed<
     /**
      * Populate documents with related data
      * Document and return types are inferred from config
+     * Input parameter is passed for post-filtering and conditional data fetching
      */
-    async populate(docs: TDoc[]): Promise<TPop[]> {
+    async populate(docs: TDoc[], input: TInput): Promise<TPop[]> {
       console.log(`[Feed:${config.name}] Populate started with ${docs.length} documents`);
       const populateStart = Date.now();
 
       await this.ready();
-      const populatedDocs = await config.populateDocuments(this.context, docs);
+      const populatedDocs = await config.populateDocuments(this.context, docs, input);
 
       console.log(`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);
       return populatedDocs;
@@ -318,8 +350,12 @@ export function createFeed<
       input: FeedQueryInput<TInput>
     ): Promise<FeedResult<TPop>> {
       const { data, nextCursor } = await this.query(input);
-      const populated = await this.populate(data);
-      return { data: populated, nextCursor };
+
+      // Extract custom input (without pagination) to pass to populate
+      const { limit, cursor, ...customInput } = input;
+      const populated = await this.populate(data, customInput as TInput);
+
+      return { items: populated, nextCursor };
     }
   }
 

@@ -8,12 +8,12 @@ import type {
   ImageStats,
   ImageUser,
   ImageSort,
-  NsfwLevel,
-  Availability,
-  BlockedReason,
   ImageFlags,
 } from '../types/image-feed-types';
 import {
+  NsfwLevel,
+  Availability,
+  BlockedReason,
   browsingLevelToArray,
   includesNsfwContent,
   onlySelectableLevels,
@@ -662,20 +662,9 @@ async function queryDocuments(
   sorts.push(searchSort);
   sorts.push('id:desc'); // Secondary sort for consistency
 
-  // Execute search with pagination from context
-  const { limit, cursor } = ctx.pagination;
-
-  // Handle cursor-based pagination
-  // Always use sortAtUnix for cursor filtering (matches old implementation)
-  if (cursor) {
-    console.log('[ImageFeed:queryDocuments] Processing cursor:', cursor);
-    // Cursor is just the sortAtUnix value
-    const sortAtUnix = parseInt(cursor);
-
-    // Filter to get items with sortAtUnix <= cursor
-    // This ensures pagination stability by creating a snapshot at the cursor timestamp
-    filters.push(makeFilter('sortAtUnix', `<= ${sortAtUnix}`));
-  }
+  // Execute search with offset-based pagination from context
+  const { limit, offset = 0 } = ctx.pagination;
+  console.log('[ImageFeed:queryDocuments] Using offset-based pagination:', { limit, offset });
 
   const finalFilter = filters.length ? filters.join(' AND ') : undefined;
 
@@ -695,11 +684,28 @@ async function queryDocuments(
     filter: finalFilter,
     sort: sorts,
     limit: limit + 1, // Get one extra to determine if there's a next page
-    offset: 0,
+    offset, // Use offset from pagination context
   });
 
   console.log(`[ImageFeed:queryDocuments] Meilisearch query completed in ${Date.now() - searchStart}ms, returned ${result.hits.length} hits`);
   console.log(`[ImageFeed:queryDocuments] Total query time: ${Date.now() - queryStart}ms`);
+
+  // Log first and last hit for debugging pagination
+  if (result.hits.length > 0) {
+    const firstHit = result.hits[0];
+    const lastHit = result.hits[result.hits.length - 1];
+    console.log('[ImageFeed:queryDocuments] First hit:', { id: firstHit.id, sortAtUnix: firstHit.sortAtUnix });
+    console.log('[ImageFeed:queryDocuments] Last hit:', { id: lastHit.id, sortAtUnix: lastHit.sortAtUnix });
+
+    if (result.hits.length > limit) {
+      const willReturnLast = result.hits[limit - 1];
+      console.log('[ImageFeed:queryDocuments] Last item to be returned (before cursor):', {
+        id: willReturnLast.id,
+        sortAtUnix: willReturnLast.sortAtUnix,
+        nextCursor: `${willReturnLast.sortAtUnix}:${willReturnLast.id}`
+      });
+    }
+  }
 
   // Return all hits including the extra one - base query() will handle slicing and cursor extraction
   return result.hits;
@@ -717,34 +723,239 @@ async function queryDocuments(
 // ============================================================================
 
 /**
+ * Helper: Fetch user reactions for images
+ */
+async function fetchUserReactions(
+  ctx: FeedContext<'Image'>,
+  imageIds: number[],
+  userId: number
+): Promise<Record<number, string[]>> {
+  const results = await ctx.pg.query<{ imageId: number; reaction: string }>(`
+    SELECT "imageId", reaction
+    FROM "ImageReaction"
+    WHERE "imageId" = ANY($1) AND "userId" = $2
+  `, [imageIds, userId]);
+
+  return results.reduce((acc, { imageId, reaction }) => {
+    acc[imageId] ??= [];
+    acc[imageId].push(reaction);
+    return acc;
+  }, {} as Record<number, string[]>);
+}
+
+/**
+ * Helper: Fetch image meta data
+ */
+async function fetchImageMeta(
+  ctx: FeedContext<'Image'>,
+  imageIds: number[]
+): Promise<Record<number, { meta: any }>> {
+  const results = await ctx.pg.query<{ id: number; meta: any }>(`
+    SELECT id, meta
+    FROM "Image"
+    WHERE id = ANY($1) AND meta IS NOT NULL
+  `, [imageIds]);
+
+  return results.reduce((acc, row) => {
+    acc[row.id] = { meta: row.meta };
+    return acc;
+  }, {} as Record<number, { meta: any }>);
+}
+
+/**
+ * Helper: Fetch video metadata
+ */
+async function fetchVideoMetadata(
+  ctx: FeedContext<'Image'>,
+  videoIds: number[]
+): Promise<Record<number, { metadata: any }>> {
+  if (videoIds.length === 0) return {};
+
+  const results = await ctx.pg.query<{ id: number; metadata: any }>(`
+    SELECT id, metadata
+    FROM "Image"
+    WHERE id = ANY($1) AND type = 'video'
+  `, [videoIds]);
+
+  return results.reduce((acc, row) => {
+    acc[row.id] = { metadata: row.metadata };
+    return acc;
+  }, {} as Record<number, { metadata: any }>);
+}
+
+/**
+ * Helper: Fetch video thumbnails
+ */
+async function fetchVideoThumbnails(
+  ctx: FeedContext<'Image'>,
+  videoIds: number[]
+): Promise<Record<number, { url: string; nsfwLevel: number }>> {
+  if (videoIds.length === 0) return {};
+
+  const results = await ctx.pg.query<{
+    imageId: number;
+    url: string;
+    nsfwLevel: number;
+  }>(`
+    SELECT
+      "imageId",
+      url,
+      "nsfwLevel"
+    FROM "ImageResource"
+    WHERE "imageId" = ANY($1) AND name = 'thumbnail'
+  `, [videoIds]);
+
+  return results.reduce((acc, row) => {
+    acc[row.imageId] = { url: row.url, nsfwLevel: row.nsfwLevel };
+    return acc;
+  }, {} as Record<number, { url: string; nsfwLevel: number }>);
+}
+
+/**
+ * Helper: Fetch image cosmetics
+ * Uses UserCosmetic table with equippedToType = 'Image'
+ */
+async function fetchImageCosmetics(
+  ctx: FeedContext<'Image'>,
+  imageIds: number[]
+): Promise<Record<number, any>> {
+  if (imageIds.length === 0) return {};
+
+  const results = await ctx.pg.query<{
+    equippedToId: number;
+    cosmeticId: number;
+    claimKey: string;
+    userData: any;
+  }>(`
+    SELECT
+      "equippedToId",
+      "cosmeticId",
+      "claimKey",
+      data as "userData"
+    FROM "UserCosmetic"
+    WHERE "equippedToId" = ANY($1) AND "equippedToType" = 'Image'::"CosmeticEntity"
+  `, [imageIds]);
+
+  if (results.length === 0) return {};
+
+  // Fetch cosmetic details
+  const cosmeticIds = results.map(r => r.cosmeticId);
+  const cosmeticsData = await ctx.cache.fetch('cosmeticData', cosmeticIds);
+
+  return results.reduce((acc, row) => {
+    const cosmetic = cosmeticsData[row.cosmeticId];
+    if (cosmetic) {
+      acc[row.equippedToId] = {
+        id: cosmetic.id,
+        name: cosmetic.name,
+        type: cosmetic.type,
+        data: cosmetic.data,
+        source: cosmetic.source,
+        claimKey: row.claimKey,
+      };
+    }
+    return acc;
+  }, {} as Record<number, any>);
+}
+
+/**
  * Populate documents with additional data
- * Includes metrics, user data, tags, cosmetics
+ * Replicates the logic from getAllImagesIndex
+ * Includes post-filtering, metrics, user data, reactions, tags, cosmetics
  */
 async function populateDocuments(
   ctx: FeedContext<'Image'>,
-  documents: ImageDocument[]
+  documents: ImageDocument[],
+  input: ImageQueryInput
 ): Promise<PopulatedImage[]> {
+  console.log('[ImageFeed:populateDocuments] Starting with', documents.length, 'documents');
+
   if (documents.length === 0) return [];
 
-  const imageIds = documents.map((d) => d.id);
-  const userIds = [...new Set(documents.map((d) => d.userId))];
+  const { currentUserId, isModerator, include = [] } = input;
+  const snappedNow = snapToInterval(Date.now());
 
-  // Fetch all required data in parallel
+  // Step 1: Apply post-filtering (matches getImagesFromSearchPostFilter logic)
+  console.log('[ImageFeed:populateDocuments] Applying post-filtering...');
+  const filteredDocs = documents.filter((doc) => {
+    // Check for valid data
+    if (!doc.url) return false;
+
+    const isOwnContent = (currentUserId && doc.userId === currentUserId) || isModerator;
+
+    // Private content check
+    if (doc.availability === 'Private' && !isOwnContent) return false;
+
+    // Blocked content check
+    if (doc.blockedFor && !isOwnContent) return false;
+
+    // Scheduled/unpublished check
+    if ((!doc.publishedAtUnix || doc.publishedAtUnix > snappedNow) && !isOwnContent)
+      return false;
+
+    // Unscanned content check (nsfwLevel === 0)
+    if (doc.nsfwLevel === 0 && !isOwnContent) return false;
+
+    // Minor content check
+    if (doc.acceptableMinor) return isOwnContent;
+
+    // Review check
+    if (![0, NsfwLevel.Blocked].includes(doc.nsfwLevel) && !doc.needsReview) return true;
+
+    return isOwnContent || (isModerator && includesNsfwContent(input.browsingLevel || 1));
+  });
+
+  console.log('[ImageFeed:populateDocuments] After filtering:', filteredDocs.length, 'documents remain');
+
+  if (filteredDocs.length === 0) return [];
+
+  // Step 2: Extract IDs for data fetching
+  const imageIds = filteredDocs.map((d) => d.id);
+  const videoIds = filteredDocs.filter((d) => d.type === 'video').map((d) => d.id);
+  const userIds = [...new Set(filteredDocs.map((d) => d.userId))];
+
+  console.log('[ImageFeed:populateDocuments] Fetching data for', imageIds.length, 'images,', videoIds.length, 'videos,', userIds.length, 'users');
+
+  // Step 3: Fetch user reactions (if authenticated)
+  let userReactions: Record<number, string[]> = {};
+  if (currentUserId) {
+    console.log('[ImageFeed:populateDocuments] Fetching user reactions...');
+    userReactions = await fetchUserReactions(ctx, imageIds, currentUserId);
+  }
+
+  // Step 4: Fetch all required data in parallel
+  console.log('[ImageFeed:populateDocuments] Fetching all data in parallel...');
   const [
     metricsData,
     usersData,
-    userCosmeticsData,
     profilePicturesData,
+    userCosmeticsData,
+    imageCosmeticsData,
+    imageMetaData,
+    videoMetadataData,
+    videoThumbnailsData,
     imageTagIdsData,
   ] = await Promise.all([
     ctx.metric.fetch(imageIds),
     ctx.cache.fetch('userData', userIds),
-    ctx.cache.fetch('userCosmetics', userIds),
-    ctx.cache.fetch('profilePictures', userIds),
+    include.includes('profilePictures')
+      ? ctx.cache.fetch('profilePictures', userIds)
+      : Promise.resolve({}),
+    include.includes('cosmetics')
+      ? ctx.cache.fetch('userCosmetics', userIds)
+      : Promise.resolve({}),
+    include.includes('cosmetics')
+      ? fetchImageCosmetics(ctx, imageIds)
+      : Promise.resolve({}),
+    include.includes('metaSelect')
+      ? fetchImageMeta(ctx, imageIds)
+      : Promise.resolve({}),
+    fetchVideoMetadata(ctx, videoIds),
+    fetchVideoThumbnails(ctx, videoIds),
     ctx.cache.fetch('imageTagIds', imageIds),
   ]);
 
-  // Get all tag IDs that need to be fetched
+  // Step 5: Fetch tag data
   const allTagIds = [...new Set(
     Object.values(imageTagIdsData).flatMap((img) =>
       Array.isArray(img.tags) ? img.tags : []
@@ -754,7 +965,7 @@ async function populateDocuments(
     ? await ctx.cache.fetch('tagData', allTagIds)
     : {};
 
-  // Get cosmetic IDs
+  // Step 6: Fetch cosmetic details for user cosmetics
   const cosmeticIds = [...new Set(
     Object.values(userCosmeticsData).flatMap((uc) =>
       Array.isArray(uc.cosmetics) ? uc.cosmetics.map((c) => c.cosmeticId) : []
@@ -764,8 +975,10 @@ async function populateDocuments(
     ? await ctx.cache.fetch('cosmeticData', cosmeticIds)
     : {};
 
-  // Build populated images
-  const populated: PopulatedImage[] = documents.map((doc) => {
+  console.log('[ImageFeed:populateDocuments] Building populated images...');
+
+  // Step 7: Transform to output format (matches getAllImagesIndex)
+  const populated: PopulatedImage[] = filteredDocs.map((doc) => {
     // Metrics and stats
     const metrics = metricsData[doc.id];
     const stats: ImageStats = {
@@ -773,86 +986,124 @@ async function populateDocuments(
       heartCountAllTime: metrics?.ReactionHeart ?? 0,
       laughCountAllTime: metrics?.ReactionLaugh ?? 0,
       cryCountAllTime: metrics?.ReactionCry ?? 0,
-      dislikeCountAllTime: 0, // Not available in new metrics
+      dislikeCountAllTime: 0,
       commentCountAllTime: metrics?.Comment ?? 0,
       collectedCountAllTime: metrics?.Collection ?? 0,
       tippedAmountCountAllTime: metrics?.Buzz ?? 0,
-      viewCountAllTime: 0, // Not available in metrics
+      viewCountAllTime: 0,
     };
 
     // User data
-    const userData = usersData[doc.userId];
-    const user: ImageUser = {
+    const userData = usersData[doc.userId] ?? {};
+    const userCosmetics = userCosmeticsData[doc.userId];
+    const userCosmeticsArray = userCosmetics && Array.isArray(userCosmetics.cosmetics)
+      ? userCosmetics.cosmetics.map((uc) => {
+          const cosmetic = cosmeticsData[uc.cosmeticId];
+          return cosmetic
+            ? {
+                id: cosmetic.id,
+                name: cosmetic.name,
+                type: cosmetic.type,
+                data: cosmetic.data,
+                source: cosmetic.source,
+                userData: uc.data,
+              }
+            : null;
+        }).filter((c): c is NonNullable<typeof c> => c !== null)
+      : [];
+
+    const user = {
       id: doc.userId,
-      username: userData?.username ?? 'unknown',
-      image: userData?.image ?? null,
-      deletedAt: userData?.deletedAt ?? null,
-      profilePictureId: profilePicturesData[doc.userId]?.id,
+      username: userData.username ?? 'unknown',
+      image: userData.image ?? null,
+      deletedAt: userData.deletedAt ?? null,
+      cosmetics: userCosmeticsArray,
+      profilePicture: profilePicturesData[doc.userId] ?? null,
     };
+
+    // Reactions
+    const reactions = userReactions[doc.id]?.map((r) => ({
+      userId: currentUserId!,
+      reaction: r,
+    })) ?? [];
 
     // Tags
     const imageTags = imageTagIdsData[doc.id];
-    let tags: Array<{
-      id: number;
-      name: string;
-      type: number;
-      nsfwLevel: NsfwLevel;
-    }> = [];
+    const tags = imageTags && Array.isArray(imageTags.tags)
+      ? imageTags.tags.map((tagId) => {
+          const tag = tagsData[tagId];
+          return tag
+            ? {
+                id: tag.id,
+                name: tag.name,
+                type: tag.type,
+                nsfwLevel: tag.nsfwLevel as NsfwLevel,
+              }
+            : null;
+        }).filter((t): t is NonNullable<typeof t> => t !== null)
+      : [];
 
-    if (imageTags && Array.isArray(imageTags.tags)) {
-      tags = imageTags.tags.map((tagId) => {
-        const tag = tagsData[tagId];
-        return tag
-          ? {
-              id: tag.id,
-              name: tag.name,
-              type: tag.type,
-              nsfwLevel: tag.nsfwLevel as NsfwLevel,
-            }
-          : null;
-      }).filter((t): t is NonNullable<typeof t> => t !== null);
-    } else if (imageTags) {
-      console.warn('[ImageFeed:populateDocuments] Invalid tags structure for image:', doc.id, imageTags);
-    }
+    // Video data
+    const meta = imageMetaData[doc.id]?.meta ?? null;
+    const videoMetadata = videoMetadataData[doc.id]?.metadata ?? null;
+    const thumbnail = videoThumbnailsData[doc.id] ?? null;
 
-    // Cosmetics
-    const userCosmetics = userCosmeticsData[doc.userId];
-    let cosmetics: Array<{
-      id: number;
-      name: string;
-      type: string;
-      data: Record<string, unknown>;
-      source: string;
-      userData: Record<string, unknown>;
-    }> = [];
+    // Calculate final nsfwLevel from thumbnail (matches getAllImagesIndex)
+    const finalNsfwLevel = Math.max(thumbnail?.nsfwLevel ?? 0, doc.nsfwLevel);
 
-    if (userCosmetics && Array.isArray(userCosmetics.cosmetics)) {
-      cosmetics = userCosmetics.cosmetics.map((uc) => {
-        const cosmetic = cosmeticsData[uc.cosmeticId];
-        return cosmetic
-          ? {
-              id: cosmetic.id,
-              name: cosmetic.name,
-              type: cosmetic.type,
-              data: cosmetic.data,
-              source: cosmetic.source,
-              userData: uc.data,
-            }
-          : null;
-      }).filter((c): c is NonNullable<typeof c> => c !== null);
-    } else if (userCosmetics) {
-      console.warn('[ImageFeed:populateDocuments] Invalid cosmetics structure for user:', doc.userId, userCosmetics);
-    }
+    // Image cosmetic
+    const cosmetic = imageCosmeticsData[doc.id] ?? null;
+
+    // Build final populated image (matches getAllImagesIndex output)
+    const { postedToId, publishedAtUnix, ...docWithoutPostedTo } = doc;
 
     return {
-      ...doc,
+      ...docWithoutPostedTo,
+
+      // Stats
       stats,
+
+      // User
       user,
+
+      // Reactions
+      reactions,
+
+      // Tags
       tags,
-      cosmetics,
+
+      // Image cosmetic
+      cosmetic,
+
+      // Transformed fields
+      modelVersionId: postedToId,
+      type: doc.type as any, // MediaType
+      createdAt: doc.sortAt,
+      publishedAt: publishedAtUnix ? doc.sortAt : undefined,
+      metadata: {
+        ...videoMetadata,
+        width: doc.width,
+        height: doc.height,
+      },
+
+      // Additional getAllImagesIndex fields
+      availability: doc.availability as any, // Availability enum
+      name: null,
+      scannedAt: null,
+      mimeType: null,
+      ingestion: finalNsfwLevel === NsfwLevel.Blocked
+        ? 'Blocked' as const
+        : finalNsfwLevel === 0
+        ? 'NotFound' as const
+        : 'Scanned' as const,
+      postTitle: null,
+      meta,
+      nsfwLevel: finalNsfwLevel,
+      thumbnailUrl: thumbnail?.url,
     };
   });
 
+  console.log('[ImageFeed:populateDocuments] Completed, returning', populated.length, 'populated images');
   return populated;
 }
 
@@ -867,5 +1118,6 @@ export const ImagesFeed = createFeed({
   createDocuments,
   queryDocuments,
   populateDocuments,
+  // Return just sortAtUnix - base.ts will combine with offset as "offset|sortAtUnix"
   getCursor: (doc) => String(doc.sortAtUnix),
 });

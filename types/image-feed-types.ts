@@ -205,17 +205,59 @@ export type ImageUser = {
 /**
  * Fully populated image with all related data
  * This is what gets returned from populateDocuments
+ * Matches the output format of getAllImagesIndex
  */
-export type PopulatedImage = ImageDocument & {
+export type PopulatedImage = Omit<ImageDocument, 'postedToId'> & {
+  // Stats from metrics
   stats: ImageStats;
-  user: ImageUser;
-  tags?: Array<{
+
+  // User data
+  user: {
+    id: number;
+    username: string;
+    image: string | null;
+    deletedAt: Date | null;
+    cosmetics: any[];
+    profilePicture: any | null;
+  };
+
+  // Reactions (user-specific)
+  reactions: Array<{
+    userId: number;
+    reaction: string;
+  }>;
+
+  // Cosmetic for the image itself
+  cosmetic: any | null;
+
+  // Tags
+  tags: Array<{
     id: number;
     name: string;
     type: number;
     nsfwLevel: NsfwLevel;
   }>;
-  cosmetics?: any[]; // Simplified - actual type is complex
+
+  // Transformed/additional fields
+  modelVersionId?: number; // from postedToId
+  createdAt: Date; // from sortAt
+  publishedAt?: Date;
+  metadata: {
+    width: number;
+    height: number;
+    [key: string]: any; // Additional video metadata
+  } | null;
+
+  // Additional getAllImagesIndex fields
+  availability: Availability;
+  name: null;
+  scannedAt: null;
+  mimeType: null;
+  ingestion: 'Scanned' | 'Blocked' | 'NotFound';
+  postTitle: null;
+  meta: any | null;
+  thumbnailUrl?: string;
+  nsfwLevel: number; // Recalculated from thumbnail
 };
 
 // ============================================================================
@@ -282,6 +324,9 @@ export type ImageQueryInput = {
   poiOnly?: boolean;
   minorOnly?: boolean;
   blockedFor?: string[];
+
+  // Population options (for conditional data fetching)
+  include?: Array<'cosmetics' | 'profilePictures' | 'metaSelect'>;
 };
 
 // ============================================================================
