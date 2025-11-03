@@ -26,6 +26,7 @@ export type FeedContext<E extends EntityType> = {
   pagination: {
     limit: number;
     cursor?: string;
+    offset?: number; // For offset-based pagination
   };
 };
 
@@ -43,7 +44,7 @@ export type FeedQueryInput<T extends Record<string, any>> = {
  * Contains data and cursor for pagination
  */
 export type FeedResult<T> = {
-  data: T[];
+  items: T[];
   nextCursor?: string;
 };
 
@@ -132,7 +133,12 @@ export type CreateFeedConfig<
   ) => Promise<TDocument[]>;
   queryDocuments: (ctx: FeedContext<E>, input: TInput) => Promise<TDocument[]>;
   // This is the key - TDocument flows from above methods to here
-  populateDocuments: (ctx: FeedContext<E>, documents: TDocument[]) => Promise<TPopulated[]>;
+  // populateDocuments receives input for post-filtering and conditional data fetching
+  populateDocuments: (
+    ctx: FeedContext<E>,
+    documents: TDocument[],
+    input: TInput
+  ) => Promise<TPopulated[]>;
   /**
    * Optional function to extract cursor from a document
    * If not provided, uses default format: sortAt:id or just id

@@ -52,6 +52,7 @@ export function createFeed<
     private index: IMeilisearchIndex | undefined;
     private indexError: Error | undefined;
     private indexReady: Promise<boolean>;
+    private configured = false;
 
     constructor(
       meilisearch: IMeilisearch,
@@ -62,77 +63,19 @@ export function createFeed<
     ) {
       this.client = meilisearch;
 
-      // Initialize index and configure settings
-      console.log(`[Feed:${config.name}] Initializing feed...`);
+      // Read-only initialization: just get the index reference
+      console.log(`[Feed:${config.name}] Initializing feed (read-only)...`);
       const initStart = Date.now();
 
-      this.indexReady = getMeilisearchFeed({
-        client: this.client,
-        name: config.name,
-      })
-        .then(async (index) => {
+      this.indexReady = this.client.getIndex(config.name)
+        .then((index) => {
           this.index = index;
           console.log(`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
-
-          // Get current settings to avoid unnecessary updates
-          const settingsStart = Date.now();
-          const currentSettings = await index.getSettings();
-          console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
-
-          // Configure index based on schema
-          const sortable: string[] = [];
-          const filterable: string[] = [];
-
-          for (const [field, fieldConfig] of Object.entries(config.schema) as [string, { sortable?: boolean; filterable?: boolean }][]) {
-            if (fieldConfig.sortable) sortable.push(field);
-            if (fieldConfig.filterable) filterable.push(field);
-          }
-
-          // Only update if changed to avoid hammering Meilisearch
-          const sortableChanged =
-            JSON.stringify(sortable.sort()) !==
-            JSON.stringify((currentSettings.sortableAttributes ?? []).sort());
-          const filterableChanged =
-            JSON.stringify(filterable.sort()) !==
-            JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
-
-          console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
-          console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
-
-          // Queue attribute updates without waiting for them to complete
-          // This prevents blocking on large indexes where updates can take time
-          const updatePromises: Promise<unknown>[] = [];
-
-          if (sortableChanged && sortable.length) {
-            console.log(`[Feed:${config.name}] Queueing sortable attributes update`);
-            updatePromises.push(
-              index.updateSortableAttributes(sortable)
-                .then(() => console.log(`[Feed:${config.name}] Sortable attributes update queued successfully`))
-                .catch((err) => console.error(`[Feed:${config.name}] Failed to update sortable attributes:`, err))
-            );
-          }
-          if (filterableChanged && filterable.length) {
-            console.log(`[Feed:${config.name}] Queueing filterable attributes update`);
-            updatePromises.push(
-              index.updateFilterableAttributes(filterable)
-                .then(() => console.log(`[Feed:${config.name}] Filterable attributes update queued successfully`))
-                .catch((err) => console.error(`[Feed:${config.name}] Failed to update filterable attributes:`, err))
-            );
-          }
-
-          // Fire off updates in the background, don't wait for them
-          if (updatePromises.length > 0) {
-            Promise.all(updatePromises).catch(() => {
-              // Swallow errors - we already logged them above
-            });
-          }
-
-          console.log(`[Feed:${config.name}] Initialization complete in ${Date.now() - initStart}ms (attribute updates queued in background)`);
           return true;
         })
         .catch((err) => {
           this.indexError = err as Error;
-          console.error(`[Feed:${config.name}] Failed to initialize:`, err);
+          console.error(`[Feed:${config.name}] Failed to get index:`, err);
           return false;
         });
 
@@ -186,10 +129,83 @@ export function createFeed<
     }
 
     /**
+     * Configure index for write operations
+     * Creates index if it doesn't exist and updates schema settings
+     * This is called automatically by upsert() and delete()
+     * Safe to call multiple times (idempotent)
+     */
+    async configure(): Promise<void> {
+      if (this.configured) return; // Already configured
+
+      console.log(`[Feed:${config.name}] Configuring index for write operations...`);
+      const configStart = Date.now();
+
+      // Ensure we can access the index
+      await this.ready();
+
+      // Try to create index if it doesn't exist
+      try {
+        this.index = await this.client.getIndex(config.name);
+      } catch (e: any) {
+        if (e.code === 'index_not_found') {
+          console.log(`[Feed:${config.name}] Index not found, creating...`);
+          const task = await this.client.createIndex(config.name, { primaryKey: 'id' });
+          await this.client.tasks.waitForTask(task.taskUid);
+          this.index = await this.client.getIndex(config.name);
+          console.log(`[Feed:${config.name}] Index created successfully`);
+        } else {
+          throw e;
+        }
+      }
+
+      // Get current settings to avoid unnecessary updates
+      const settingsStart = Date.now();
+      const currentSettings = await this.index.getSettings();
+      console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
+
+      // Configure index based on schema
+      const sortable: string[] = [];
+      const filterable: string[] = [];
+
+      for (const [field, fieldConfig] of Object.entries(config.schema) as [string, { sortable?: boolean; filterable?: boolean }][]) {
+        if (fieldConfig.sortable) sortable.push(field);
+        if (fieldConfig.filterable) filterable.push(field);
+      }
+
+      // Only update if changed to avoid hammering Meilisearch
+      const sortableChanged =
+        JSON.stringify(sortable.sort()) !==
+        JSON.stringify((currentSettings.sortableAttributes ?? []).sort());
+      const filterableChanged =
+        JSON.stringify(filterable.sort()) !==
+        JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
+
+      console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
+      console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
+
+      // Update attributes synchronously to ensure they're set before writes
+      if (sortableChanged && sortable.length) {
+        console.log(`[Feed:${config.name}] Updating sortable attributes`);
+        const task = await this.index.updateSortableAttributes(sortable);
+        await this.client.tasks.waitForTask(task.taskUid);
+        console.log(`[Feed:${config.name}] Sortable attributes updated successfully`);
+      }
+      if (filterableChanged && filterable.length) {
+        console.log(`[Feed:${config.name}] Updating filterable attributes`);
+        const task = await this.index.updateFilterableAttributes(filterable);
+        await this.client.tasks.waitForTask(task.taskUid);
+        console.log(`[Feed:${config.name}] Filterable attributes updated successfully`);
+      }
+
+      this.configured = true;
+      console.log(`[Feed:${config.name}] Configuration complete in ${Date.now() - configStart}ms`);
+    }
+
+    /**
      * Delete documents from the index
      */
     async delete(ids: number[]): Promise<void> {
-      await this.ready();
+      await this.configure(); // Ensure index is configured for write operations
       const task = await this.index!.deleteDocuments(ids);
       // Task is queued, we don't wait for completion
     }
@@ -202,7 +218,7 @@ export function createFeed<
      * @param type - Type of update ('full' or 'metrics')
      */
     async upsert(ids: number[], type: UpsertType = 'full'): Promise<void> {
-      await this.ready();
+      await this.configure(); // Ensure index is configured for write operations
 
       const batcher = createAsyncBatcher<TDoc>(
         options.upsertBatchSize,
@@ -237,10 +253,30 @@ export function createFeed<
       // Extract pagination from input
       const { limit = 20, cursor, ...customInput } = input;
 
+      // Parse cursor to extract offset
+      // Cursor format: "offset|timestamp" e.g., "100|1724677401898"
+      let offset = 0;
+      let entry: string | undefined;
+
+      if (cursor) {
+        const parts = cursor.split('|');
+        if (parts.length === 2) {
+          offset = parseInt(parts[0]) || 0;
+          entry = parts[1];
+          console.log(`[Feed:${config.name}] Parsed cursor: offset=${offset}, entry=${entry}`);
+        } else if (parts.length === 1) {
+          // Fallback: if cursor is just a number, treat it as offset
+          offset = parseInt(parts[0]) || 0;
+          console.log(`[Feed:${config.name}] Parsed cursor as offset only: ${offset}`);
+        } else {
+          console.warn(`[Feed:${config.name}] Invalid cursor format, expected 'offset|timestamp', got:`, cursor);
+        }
+      }
+
       // Create context with pagination
       const ctxWithPagination: FeedContext<E> = {
         ...this.context,
-        pagination: { limit, cursor },
+        pagination: { limit, cursor, offset },
       };
 
       // Pass custom input (without pagination) to queryDocuments
@@ -258,19 +294,30 @@ export function createFeed<
         data = docs.slice(0, limit);
         const lastItem = data[limit - 1] as Record<string, unknown>;
 
-        // Generate cursor from document if getCursor function is provided
+        console.log(`[Feed:${config.name}] More results available (${docs.length} > ${limit}), generating cursor from last returned item`);
+
+        // Calculate new offset for next page
+        const newOffset = offset + limit;
+
+        // Get timestamp from last item using getCursor or default to sortAtUnix
+        let timestamp: string | number;
         if (config.getCursor) {
-          nextCursor = config.getCursor(lastItem as TDoc);
+          timestamp = config.getCursor(lastItem as TDoc);
+          console.log(`[Feed:${config.name}] Got timestamp from getCursor():`, timestamp);
         } else {
-          // Default cursor format: sortAt:id or just id
-          const sortAt = lastItem.sortAt;
-          const id = lastItem.id;
-          nextCursor = sortAt ? `${sortAt}:${id}` : String(id);
+          // Default: use sortAtUnix or sortAt or id
+          timestamp = (lastItem.sortAtUnix as number) || (lastItem.sortAt as number) || (lastItem.id as number);
+          console.log(`[Feed:${config.name}] Using default timestamp:`, timestamp);
         }
+
+        // Generate cursor in format "offset|timestamp"
+        nextCursor = `${newOffset}|${timestamp}`;
+        console.log(`[Feed:${config.name}] Generated cursor:`, nextCursor);
       } else {
         // No more results
         data = docs;
         nextCursor = undefined;
+        console.log(`[Feed:${config.name}] No more results available (${docs.length} <= ${limit}), no cursor generated`);
       }
 
       console.log(`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
@@ -280,13 +327,14 @@ export function createFeed<
     /**
      * Populate documents with related data
      * Document and return types are inferred from config
+     * Input parameter is passed for post-filtering and conditional data fetching
      */
-    async populate(docs: TDoc[]): Promise<TPop[]> {
+    async populate(docs: TDoc[], input: TInput): Promise<TPop[]> {
       console.log(`[Feed:${config.name}] Populate started with ${docs.length} documents`);
       const populateStart = Date.now();
 
       await this.ready();
-      const populatedDocs = await config.populateDocuments(this.context, docs);
+      const populatedDocs = await config.populateDocuments(this.context, docs, input);
 
       console.log(`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);
       return populatedDocs;
@@ -302,8 +350,12 @@ export function createFeed<
       input: FeedQueryInput<TInput>
     ): Promise<FeedResult<TPop>> {
       const { data, nextCursor } = await this.query(input);
-      const populated = await this.populate(data);
-      return { data: populated, nextCursor };
+
+      // Extract custom input (without pagination) to pass to populate
+      const { limit, cursor, ...customInput } = input;
+      const populated = await this.populate(data, customInput as TInput);
+
+      return { items: populated, nextCursor };
     }
   }
 
