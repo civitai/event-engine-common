@@ -326,7 +326,16 @@ export type ImageQueryInput = {
   blockedFor?: string[];
 
   // Population options (for conditional data fetching)
-  include?: Array<'cosmetics' | 'profilePictures' | 'metaSelect'>;
+  include?: Array<
+    'tags' |
+    'count' |
+    'cosmetics' |
+    'report' |
+    'meta' |
+    'tagIds' |
+    'profilePictures' |
+    'metaSelect'
+  >;
 };
 
 // ============================================================================

@@ -1072,6 +1072,10 @@ async function populateDocuments(
 
   // Step 5: Fetch all required data in parallel
   console.log('[ImageFeed:populateDocuments] Fetching all data in parallel...');
+  const includeTags = include.includes('tags');
+  const includeTagIds = include.includes('tagIds');
+  const shouldFetchTags = includeTags || includeTagIds;
+
   const [
     metricsData,
     usersData,
@@ -1099,15 +1103,17 @@ async function populateDocuments(
       : Promise.resolve({}),
     fetchVideoMetadata(ctx, videoIds),
     fetchVideoThumbnails(ctx, videoIds),
-    ctx.cache.fetch('imageTagIds', imageIds),
+    shouldFetchTags
+      ? ctx.cache.fetch('imageTagIds', imageIds)
+      : Promise.resolve({}),
   ]);
 
-  // Step 5: Fetch tag data
-  const allTagIds = [...new Set(
+  // Step 5: Fetch tag data (only if tags or tagIds requested)
+  const allTagIds = shouldFetchTags ? [...new Set(
     Object.values(imageTagIdsData).flatMap((img) =>
       Array.isArray(img.tags) ? img.tags : []
     )
-  )];
+  )] : [];
   const tagsData = allTagIds.length > 0
     ? await ctx.cache.fetch('tagData', allTagIds)
     : {};
@@ -1174,9 +1180,9 @@ async function populateDocuments(
       reaction: r,
     })) ?? [];
 
-    // Tags
-    const imageTags = imageTagIdsData[doc.id];
-    const tags = imageTags && Array.isArray(imageTags.tags)
+    // Tags (only if 'tags' in include, otherwise empty array like getAllImagesIndex)
+    const imageTags = includeTags ? imageTagIdsData[doc.id] : null;
+    const tags = includeTags && imageTags && Array.isArray(imageTags.tags)
       ? imageTags.tags.map((tagId) => {
           const tag = tagsData[tagId];
           return tag

@@ -333,7 +333,7 @@ export function createFeed<
       }
 
       console.log(`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
-      return { data, nextCursor };
+      return { items: data, nextCursor };
     }
 
     /**
@@ -361,11 +361,10 @@ export function createFeed<
     async populatedQuery(
       input: FeedQueryInput<TInput>
     ): Promise<FeedResult<TPop>> {
-      const { data, nextCursor } = await this.query(input);
+      const { items, nextCursor } = await this.query(input);
 
       // Extract custom input (without pagination) to pass to populate
-      const { limit, cursor, ...customInput } = input;
-      const populated = await this.populate(data, customInput as TInput);
+      const populated = await this.populate(items, input as TInput);
 
       return { items: populated, nextCursor };
     }
