@@ -2,7 +2,7 @@
 
 // Services
 export { MetricService } from './services/metrics';
-export { OutboxService, OutboxEvent } from './services/outbox';
+export { OutboxService } from './services/outbox';
 export type { OutboxRecord } from './services/outbox';
 export { SignalsService } from './services/signals';
 

@@ -1,16 +1,8 @@
 import { IPgClient } from '../types/package-stubs';
 
-export enum OutboxEvent {
-    PUBLISHED = 'PUBLISHED',
-    UNPUBLISHED = 'UNPUBLISHED',
-    DELETED = 'DELETED',
-    UPDATED = 'UPDATED',
-    TO_SCAN = 'TO_SCAN'
-}
-
 export type OutboxRecord<TDetails = Record<string, any>> = {
     id: number;
-    event: OutboxEvent;
+    event: string;
     entityType: 'Article' | 'Image' | 'Model' | 'Post' | 'ModelVersion';
     entityId: number;
     details?: TDetails | null;
