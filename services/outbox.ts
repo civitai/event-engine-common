@@ -8,11 +8,12 @@ export enum OutboxEvent {
     TO_SCAN = 'TO_SCAN'
 }
 
-export type OutboxRecord = {
+export type OutboxRecord<TDetails = Record<string, any>> = {
     id: number;
     event: OutboxEvent;
     entityType: 'Article' | 'Image' | 'Model' | 'Post' | 'ModelVersion';
     entityId: number;
+    details?: TDetails | null;
     createdAt?: Date;
 }
 
