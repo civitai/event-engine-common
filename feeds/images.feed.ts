@@ -537,6 +537,19 @@ async function queryDocuments(
   filters.push(`(${nsfwFilters.join(' OR ')})`);
   console.log('[ImageFeed:queryDocuments] NSFW filter added');
 
+  // NSFW License Restrictions Filter (if constants provided)
+  // Filter out images with R/X/XXX NSFW levels that use restricted base models
+  if (ctx.constants?.nsfwRestrictedBaseModels && ctx.constants.nsfwRestrictedBaseModels.length > 0) {
+    const restrictedBaseModelsQuoted = ctx.constants.nsfwRestrictedBaseModels.map((bm: string) => `'${bm}'`);
+    const nsfwBrowsingLevels = ctx.constants.nsfwBrowsingLevelsArray || [16, 32, 64]; // R, X, XXX
+
+    // Exclude images that have BOTH restricted NSFW levels AND restricted base models
+    filters.push(
+      `NOT (${nsfwLevelField} IN [${nsfwBrowsingLevels.join(',')}] AND baseModel IN [${restrictedBaseModelsQuoted.join(',')}])`
+    );
+    console.log('[ImageFeed:queryDocuments] NSFW restricted base models filter added');
+  }
+
   console.log('[ImageFeed:queryDocuments] Step 4: Content filters (model versions, remixes, tags, etc.)...');
 
   // Model Version Filtering
@@ -582,21 +595,30 @@ async function queryDocuments(
 
   // Publishing Status Filtering
   const snappedNow = snapToInterval(Date.now());
+  const currentTime = Date.now();
   if (isModerator) {
     if (notPublished) {
-      filters.push(makeFilter('publishedAtUnix', 'NOT EXISTS'));
+      const filter = makeFilter('publishedAtUnix', 'NOT EXISTS');
+      filters.push(filter);
+      console.log('[ImageFeed:queryDocuments] NOT PUBLISHED filter:', filter);
     } else if (scheduled) {
-      filters.push(makeFilter('publishedAtUnix', `> ${Date.now()}`));
+      const filter = makeFilter('publishedAtUnix', `> ${currentTime}`);
+      filters.push(filter);
+      console.log('[ImageFeed:queryDocuments] SCHEDULED filter:', filter, 'currentTime:', currentTime, new Date(currentTime).toISOString());
     } else {
-      const publishedFilters = [makeFilter('publishedAtUnix', `<= ${Date.now()}`)];
+      const publishedFilters = [makeFilter('publishedAtUnix', `<= ${currentTime}`)];
       if (currentUserId) {
         publishedFilters.push(makeFilter('userId', `= ${currentUserId}`));
       }
-      filters.push(`(${publishedFilters.join(' OR ')})`);
+      const filter = `(${publishedFilters.join(' OR ')})`;
+      filters.push(filter);
+      console.log('[ImageFeed:queryDocuments] DEFAULT PUBLISHED filter:', filter);
     }
   } else if (!userId) {
     // General feed - apply published filter for caching
-    filters.push(makeFilter('publishedAtUnix', `<= ${snappedNow}`));
+    const filter = makeFilter('publishedAtUnix', `<= ${snappedNow}`);
+    filters.push(filter);
+    console.log('[ImageFeed:queryDocuments] GENERAL PUBLISHED filter:', filter, 'snappedNow:', snappedNow);
   }
 
   // Type Filtering
@@ -660,7 +682,8 @@ async function queryDocuments(
     searchSort = 'sortAt:desc';
   }
   sorts.push(searchSort);
-  sorts.push('id:desc'); // Secondary sort for consistency
+  // Note: NOT adding secondary sort by ID to match current getAllImagesIndex behavior
+  // sorts.push('id:desc'); // Secondary sort for consistency
 
   // Execute search with offset-based pagination from context
   const { limit, offset = 0 } = ctx.pagination;
@@ -785,6 +808,7 @@ async function fetchVideoMetadata(
 
 /**
  * Helper: Fetch video thumbnails
+ * Thumbnails are stored as Image records with parentId in metadata
  */
 async function fetchVideoThumbnails(
   ctx: FeedContext<'Image'>,
@@ -792,21 +816,42 @@ async function fetchVideoThumbnails(
 ): Promise<Record<number, { url: string; nsfwLevel: number }>> {
   if (videoIds.length === 0) return {};
 
-  const results = await ctx.pg.query<{
-    imageId: number;
-    url: string;
-    nsfwLevel: number;
-  }>(`
+  // First, get thumbnail IDs from video metadata
+  const targets = await ctx.pg.query<{ imageId: number; thumbnailId: number }>(`
     SELECT
-      "imageId",
-      url,
-      "nsfwLevel"
-    FROM "ImageResource"
-    WHERE "imageId" = ANY($1) AND name = 'thumbnail'
+      id as "imageId",
+      cast(metadata->'thumbnailId' as int) as "thumbnailId"
+    FROM "Image"
+    WHERE id = ANY($1) AND type = 'video'
   `, [videoIds]);
 
-  return results.reduce((acc, row) => {
-    acc[row.imageId] = { url: row.url, nsfwLevel: row.nsfwLevel };
+  const thumbnailIds = targets
+    .map((x) => x.thumbnailId)
+    .filter((id): id is number => id != null);
+
+  if (thumbnailIds.length === 0) return {};
+
+  // Fetch thumbnail images
+  const thumbnails = await ctx.pg.query<{
+    id: number;
+    url: string;
+    nsfwLevel: number;
+    parentId: number;
+  }>(`
+    SELECT
+      id,
+      url,
+      "nsfwLevel",
+      cast(metadata->'parentId' as int) as "parentId"
+    FROM "Image"
+    WHERE id = ANY($1)
+  `, [thumbnailIds]);
+
+  // Map by parentId (which is the video ID)
+  return thumbnails.reduce((acc, row) => {
+    if (row.parentId) {
+      acc[row.parentId] = { url: row.url, nsfwLevel: row.nsfwLevel };
+    }
     return acc;
   }, {} as Record<number, { url: string; nsfwLevel: number }>);
 }
@@ -909,21 +954,123 @@ async function populateDocuments(
 
   if (filteredDocs.length === 0) return [];
 
-  // Step 2: Extract IDs for data fetching
-  const imageIds = filteredDocs.map((d) => d.id);
-  const videoIds = filteredDocs.filter((d) => d.type === 'video').map((d) => d.id);
-  const userIds = [...new Set(filteredDocs.map((d) => d.userId))];
+  // Step 2: Existence checking (feature-flagged)
+  let existenceFilteredDocs = filteredDocs;
+
+  if (ctx.redis && ctx.flipt && ctx.constants) {
+    console.log('[ImageFeed:populateDocuments] Existence checking enabled');
+
+    // Check feature flag
+    let cacheExistenceEnabled = false;
+    try {
+      const flag = await ctx.flipt.evaluateBoolean({
+        flagKey: ctx.constants.FLIPT_FEATURE_FLAGS.FEED_IMAGE_EXISTENCE,
+        entityId: currentUserId?.toString() || 'anonymous',
+        context: {},
+      });
+      cacheExistenceEnabled = flag.enabled;
+    } catch (err) {
+      console.log('[ImageFeed:populateDocuments] Flipt evaluation failed:', err);
+    }
+
+    console.log('[ImageFeed:populateDocuments] Cache existence enabled:', cacheExistenceEnabled);
+
+    const imageIds = filteredDocs.map((d) => d.id);
+
+    if (!cacheExistenceEnabled) {
+      // BASIC DB CHECK (default)
+      console.log('[ImageFeed:populateDocuments] Using basic DB check');
+      const dbIdResp = await ctx.pg.query<{ id: number }>(`
+        SELECT id FROM "Image" WHERE id = ANY($1)
+      `, [imageIds]);
+
+      const idSet = new Set(dbIdResp.map((r) => r.id));
+      existenceFilteredDocs = filteredDocs.filter((d) => idSet.has(d.id));
+
+      console.log('[ImageFeed:populateDocuments] Basic DB check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
+    } else {
+      // SMART CACHE EXISTENCE CHECK (feature-flagged)
+      console.log('[ImageFeed:populateDocuments] Using smart cache check');
+      const uniqueIds = [...new Set(imageIds)];
+      const cachePrefix = `${ctx.constants.REDIS_SYS_KEYS.CACHES.IMAGE_EXISTS}:`;
+      const cacheKeys = uniqueIds.map((id) => `${cachePrefix}${id}`);
+
+      // Check cached results first (10 minute TTL)
+      const cachedResults = cacheKeys.length > 0 ? await ctx.redis.packed.mGet(cacheKeys) : [];
+
+      // Separate cached and uncached IDs
+      const uncachedIds: number[] = [];
+      const cachedMap = new Map<number, boolean>();
+
+      for (let i = 0; i < uniqueIds.length; i++) {
+        const id = uniqueIds[i];
+        const cachedResult = cachedResults[i];
+
+        if (cachedResult === 'true') {
+          cachedMap.set(id, true);
+        } else if (cachedResult === 'false') {
+          cachedMap.set(id, false);
+        } else {
+          uncachedIds.push(id);
+        }
+      }
+
+      console.log('[ImageFeed:populateDocuments] Cache stats: cached=', uniqueIds.length - uncachedIds.length, 'uncached=', uncachedIds.length);
+
+      // Query DB for uncached IDs
+      if (uncachedIds.length > 0) {
+        const dbResults = await ctx.pg.query<{ id: number }>(`
+          SELECT id FROM "Image" WHERE id = ANY($1)
+        `, [uncachedIds]);
+
+        const dbIdSet = new Set(dbResults.map((r) => r.id));
+
+        // Update cache with DB results (10-minute TTL)
+        const cacheUpdates: Record<string, string> = {};
+        for (const id of uncachedIds) {
+          const exists = dbIdSet.has(id);
+          cacheUpdates[`${cachePrefix}${id}`] = exists ? 'true' : 'false';
+          cachedMap.set(id, exists);
+        }
+
+        if (ctx.redis) {
+          await Promise.all(
+            Object.entries(cacheUpdates).map(([key, value]) =>
+              ctx.redis!.packed.set(key, value, { EX: 600 })
+            )
+          );
+        }
+      }
+
+      // Filter based on existence
+      existenceFilteredDocs = filteredDocs.filter((d) => {
+        const exists = cachedMap.get(d.id);
+        return exists !== false; // treat undefined as exists=true
+      });
+
+      console.log('[ImageFeed:populateDocuments] Smart cache check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
+    }
+  } else {
+    console.log('[ImageFeed:populateDocuments] Existence checking disabled (no redis/flipt/constants)');
+  }
+
+  if (existenceFilteredDocs.length === 0) return [];
+
+  // Step 3: Extract IDs for data fetching
+  const imageIds = existenceFilteredDocs.map((d) => d.id);
+  const videoIds = existenceFilteredDocs.filter((d) => d.type === 'video').map((d) => d.id);
+  const userIds = [...new Set(existenceFilteredDocs.map((d) => d.userId))];
 
   console.log('[ImageFeed:populateDocuments] Fetching data for', imageIds.length, 'images,', videoIds.length, 'videos,', userIds.length, 'users');
 
-  // Step 3: Fetch user reactions (if authenticated)
+  // Step 4: Fetch user reactions (if authenticated)
   let userReactions: Record<number, string[]> = {};
   if (currentUserId) {
     console.log('[ImageFeed:populateDocuments] Fetching user reactions...');
     userReactions = await fetchUserReactions(ctx, imageIds, currentUserId);
   }
 
-  // Step 4: Fetch all required data in parallel
+  // Step 5: Fetch all required data in parallel
   console.log('[ImageFeed:populateDocuments] Fetching all data in parallel...');
   const [
     metricsData,
@@ -977,8 +1124,8 @@ async function populateDocuments(
 
   console.log('[ImageFeed:populateDocuments] Building populated images...');
 
-  // Step 7: Transform to output format (matches getAllImagesIndex)
-  const populated: PopulatedImage[] = filteredDocs.map((doc) => {
+  // Step 6: Transform to output format (matches getAllImagesIndex)
+  const populated: PopulatedImage[] = existenceFilteredDocs.map((doc) => {
     // Metrics and stats
     const metrics = metricsData[doc.id];
     const stats: ImageStats = {
@@ -995,9 +1142,9 @@ async function populateDocuments(
 
     // User data
     const userData = usersData[doc.userId] ?? {};
-    const userCosmetics = userCosmeticsData[doc.userId];
+    const userCosmetics = userCosmeticsData[doc.userId] as { cosmetics: Array<{ cosmeticId: number; data: Record<string, unknown> }> } | undefined;
     const userCosmeticsArray = userCosmetics && Array.isArray(userCosmetics.cosmetics)
-      ? userCosmetics.cosmetics.map((uc) => {
+      ? userCosmetics.cosmetics.map((uc: { cosmeticId: number; data: Record<string, unknown> }) => {
           const cosmetic = cosmeticsData[uc.cosmeticId];
           return cosmetic
             ? {
@@ -1009,7 +1156,7 @@ async function populateDocuments(
                 userData: uc.data,
               }
             : null;
-        }).filter((c): c is NonNullable<typeof c> => c !== null)
+        }).filter((c: any): c is NonNullable<typeof c> => c !== null)
       : [];
 
     const user = {
@@ -1102,6 +1249,19 @@ async function populateDocuments(
       thumbnailUrl: thumbnail?.url,
     };
   });
+
+  // Step 7: Track seen images (if Redis available)
+  if (ctx.redis && ctx.constants && populated.length > 0) {
+    console.log('[ImageFeed:populateDocuments] Tracking', populated.length, 'seen images');
+    try {
+      await ctx.redis.packed.sAdd(
+        ctx.constants.REDIS_SYS_KEYS.QUEUES.SEEN_IMAGES,
+        populated.map((i) => i.id)
+      );
+    } catch (err) {
+      console.error('[ImageFeed:populateDocuments] Error tracking seen images:', err);
+    }
+  }
 
   console.log('[ImageFeed:populateDocuments] Completed, returning', populated.length, 'populated images');
   return populated;

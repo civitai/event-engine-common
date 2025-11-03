@@ -14,6 +14,9 @@ import {
   FeedResult,
   UpsertType,
   FeedSchema,
+  IRedisClient,
+  IFeatureFlagClient,
+  IFeedConstants,
 } from './types';
 
 /**
@@ -59,7 +62,12 @@ export function createFeed<
       ch: IClickhouseClient,
       pg: IDbClient,
       metricService: MetricService,
-      cacheService: CacheService
+      cacheService: CacheService,
+      options?: {
+        redis?: IRedisClient;
+        flipt?: IFeatureFlagClient;
+        constants?: IFeedConstants;
+      }
     ) {
       this.client = meilisearch;
 
@@ -116,6 +124,10 @@ export function createFeed<
           limit: 20,
           cursor: undefined,
         },
+        // Optional context properties
+        redis: options?.redis,
+        flipt: options?.flipt,
+        constants: options?.constants,
       } as FeedContext<E>;
     }
 
