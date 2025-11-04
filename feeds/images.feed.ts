@@ -6,21 +6,23 @@ import type {
   PopulatedImage,
   SearchBaseImage,
   ImageStats,
-  ImageUser,
   ImageSort,
   ImageFlags,
 } from '../types/image-feed-types';
 import {
   NsfwLevel,
-  Availability,
-  BlockedReason,
+  Availability, 
   browsingLevelToArray,
   includesNsfwContent,
   onlySelectableLevels,
   snapToInterval,
 } from '../types/image-feed-types';
-import type { ImageMetrics } from '../types/metric-types';
 import { chunk } from '../utils/basic';
+import {
+  NSFW_RESTRICTED_BASE_MODELS,
+  NSFW_RESTRICTED_LEVELS,
+  FEED_REDIS_KEYS,
+} from '../constants/feed.constants';
 
 // ============================================================================
 // Schema Definition
@@ -537,15 +539,14 @@ async function queryDocuments(
   filters.push(`(${nsfwFilters.join(' OR ')})`);
   console.log('[ImageFeed:queryDocuments] NSFW filter added');
 
-  // NSFW License Restrictions Filter (if constants provided)
+  // NSFW License Restrictions Filter
   // Filter out images with R/X/XXX NSFW levels that use restricted base models
-  if (ctx.constants?.nsfwRestrictedBaseModels && ctx.constants.nsfwRestrictedBaseModels.length > 0) {
-    const restrictedBaseModelsQuoted = ctx.constants.nsfwRestrictedBaseModels.map((bm: string) => `'${bm}'`);
-    const nsfwBrowsingLevels = ctx.constants.nsfwBrowsingLevelsArray || [16, 32, 64]; // R, X, XXX
+  if (NSFW_RESTRICTED_BASE_MODELS.length > 0) {
+    const restrictedBaseModelsQuoted = NSFW_RESTRICTED_BASE_MODELS.map((bm: string) => `'${bm}'`);
 
     // Exclude images that have BOTH restricted NSFW levels AND restricted base models
     filters.push(
-      `NOT (${nsfwLevelField} IN [${nsfwBrowsingLevels.join(',')}] AND baseModel IN [${restrictedBaseModelsQuoted.join(',')}])`
+      `NOT (${nsfwLevelField} IN [${NSFW_RESTRICTED_LEVELS.join(',')}] AND baseModel IN [${restrictedBaseModelsQuoted.join(',')}])`
     );
     console.log('[ImageFeed:queryDocuments] NSFW restricted base models filter added');
   }
@@ -957,101 +958,84 @@ async function populateDocuments(
   // Step 2: Existence checking (feature-flagged)
   let existenceFilteredDocs = filteredDocs;
 
-  if (ctx.redis && ctx.flipt && ctx.constants) {
-    console.log('[ImageFeed:populateDocuments] Existence checking enabled');
+  console.log('[ImageFeed:populateDocuments] Existence checking available');
 
-    // Check feature flag
-    let cacheExistenceEnabled = false;
-    try {
-      const flag = await ctx.flipt.evaluateBoolean({
-        flagKey: ctx.constants.FLIPT_FEATURE_FLAGS.FEED_IMAGE_EXISTENCE,
-        entityId: currentUserId?.toString() || 'anonymous',
-        context: {},
-      });
-      cacheExistenceEnabled = flag.enabled;
-    } catch (err) {
-      console.log('[ImageFeed:populateDocuments] Flipt evaluation failed:', err);
-    }
+  // Check if existence checking is enabled (passed from caller)
+  const cacheExistenceEnabled = input.enableExistenceCheck ?? false;
+  console.log('[ImageFeed:populateDocuments] Cache existence enabled:', cacheExistenceEnabled);
 
-    console.log('[ImageFeed:populateDocuments] Cache existence enabled:', cacheExistenceEnabled);
+  const imageIdsForExistence = filteredDocs.map((d) => d.id);
 
-    const imageIds = filteredDocs.map((d) => d.id);
+  if (!cacheExistenceEnabled) {
+    // BASIC DB CHECK (default)
+    console.log('[ImageFeed:populateDocuments] Using basic DB check');
+    const dbIdResp = await ctx.pg.query<{ id: number }>(`
+      SELECT id FROM "Image" WHERE id = ANY($1)
+    `, [imageIdsForExistence]);
 
-    if (!cacheExistenceEnabled) {
-      // BASIC DB CHECK (default)
-      console.log('[ImageFeed:populateDocuments] Using basic DB check');
-      const dbIdResp = await ctx.pg.query<{ id: number }>(`
-        SELECT id FROM "Image" WHERE id = ANY($1)
-      `, [imageIds]);
+    const idSet = new Set(dbIdResp.map((r) => r.id));
+    existenceFilteredDocs = filteredDocs.filter((d) => idSet.has(d.id));
 
-      const idSet = new Set(dbIdResp.map((r) => r.id));
-      existenceFilteredDocs = filteredDocs.filter((d) => idSet.has(d.id));
-
-      console.log('[ImageFeed:populateDocuments] Basic DB check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
-    } else {
-      // SMART CACHE EXISTENCE CHECK (feature-flagged)
-      console.log('[ImageFeed:populateDocuments] Using smart cache check');
-      const uniqueIds = [...new Set(imageIds)];
-      const cachePrefix = `${ctx.constants.REDIS_SYS_KEYS.CACHES.IMAGE_EXISTS}:`;
-      const cacheKeys = uniqueIds.map((id) => `${cachePrefix}${id}`);
-
-      // Check cached results first (10 minute TTL)
-      const cachedResults = cacheKeys.length > 0 ? await ctx.redis.packed.mGet(cacheKeys) : [];
-
-      // Separate cached and uncached IDs
-      const uncachedIds: number[] = [];
-      const cachedMap = new Map<number, boolean>();
-
-      for (let i = 0; i < uniqueIds.length; i++) {
-        const id = uniqueIds[i];
-        const cachedResult = cachedResults[i];
-
-        if (cachedResult === 'true') {
-          cachedMap.set(id, true);
-        } else if (cachedResult === 'false') {
-          cachedMap.set(id, false);
-        } else {
-          uncachedIds.push(id);
-        }
-      }
-
-      console.log('[ImageFeed:populateDocuments] Cache stats: cached=', uniqueIds.length - uncachedIds.length, 'uncached=', uncachedIds.length);
-
-      // Query DB for uncached IDs
-      if (uncachedIds.length > 0) {
-        const dbResults = await ctx.pg.query<{ id: number }>(`
-          SELECT id FROM "Image" WHERE id = ANY($1)
-        `, [uncachedIds]);
-
-        const dbIdSet = new Set(dbResults.map((r) => r.id));
-
-        // Update cache with DB results (10-minute TTL)
-        const cacheUpdates: Record<string, string> = {};
-        for (const id of uncachedIds) {
-          const exists = dbIdSet.has(id);
-          cacheUpdates[`${cachePrefix}${id}`] = exists ? 'true' : 'false';
-          cachedMap.set(id, exists);
-        }
-
-        if (ctx.redis) {
-          await Promise.all(
-            Object.entries(cacheUpdates).map(([key, value]) =>
-              ctx.redis!.packed.set(key, value, { EX: 600 })
-            )
-          );
-        }
-      }
-
-      // Filter based on existence
-      existenceFilteredDocs = filteredDocs.filter((d) => {
-        const exists = cachedMap.get(d.id);
-        return exists !== false; // treat undefined as exists=true
-      });
-
-      console.log('[ImageFeed:populateDocuments] Smart cache check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
-    }
+    console.log('[ImageFeed:populateDocuments] Basic DB check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
   } else {
-    console.log('[ImageFeed:populateDocuments] Existence checking disabled (no redis/flipt/constants)');
+    // SMART CACHE EXISTENCE CHECK (feature-flagged)
+    console.log('[ImageFeed:populateDocuments] Using smart cache check');
+    const uniqueIds = [...new Set(imageIdsForExistence)];
+    const cachePrefix = `${FEED_REDIS_KEYS.CACHES.IMAGE_EXISTS}:`;
+    const cacheKeys = uniqueIds.map((id) => `${cachePrefix}${id}`);
+
+    // Check cached results first (10 minute TTL)
+    const cachedResults = cacheKeys.length > 0 ? await ctx.cache.mGet(cacheKeys) : [];
+
+    // Separate cached and uncached IDs
+    const uncachedIds: number[] = [];
+    const cachedMap = new Map<number, boolean>();
+
+    for (let i = 0; i < uniqueIds.length; i++) {
+      const id = uniqueIds[i];
+      const cachedResult = cachedResults[i];
+
+      if (cachedResult === 'true') {
+        cachedMap.set(id, true);
+      } else if (cachedResult === 'false') {
+        cachedMap.set(id, false);
+      } else {
+        uncachedIds.push(id);
+      }
+    }
+
+    console.log('[ImageFeed:populateDocuments] Cache stats: cached=', uniqueIds.length - uncachedIds.length, 'uncached=', uncachedIds.length);
+
+    // Query DB for uncached IDs
+    if (uncachedIds.length > 0) {
+      const dbResults = await ctx.pg.query<{ id: number }>(`
+        SELECT id FROM "Image" WHERE id = ANY($1)
+      `, [uncachedIds]);
+
+      const dbIdSet = new Set(dbResults.map((r) => r.id));
+
+      // Update cache with DB results (10-minute TTL)
+      const cacheUpdates: Record<string, string> = {};
+      for (const id of uncachedIds) {
+        const exists = dbIdSet.has(id);
+        cacheUpdates[`${cachePrefix}${id}`] = exists ? 'true' : 'false';
+        cachedMap.set(id, exists);
+      }
+
+      await Promise.all(
+        Object.entries(cacheUpdates).map(([key, value]) =>
+          ctx.cache.set(key, value, { EX: 600 })
+        )
+      );
+    }
+
+    // Filter based on existence
+    existenceFilteredDocs = filteredDocs.filter((d) => {
+      const exists = cachedMap.get(d.id);
+      return exists !== false; // treat undefined as exists=true
+    });
+
+    console.log('[ImageFeed:populateDocuments] Smart cache check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
   }
 
   if (existenceFilteredDocs.length === 0) return [];
@@ -1249,7 +1233,7 @@ async function populateDocuments(
       },
 
       // Additional getAllImagesIndex fields
-      availability: doc.availability as any, // Availability enum
+      availability: doc.availability as Availability, // Availability enum
       name: null,
       scannedAt: null,
       mimeType: null,
@@ -1265,12 +1249,12 @@ async function populateDocuments(
     };
   });
 
-  // Step 7: Track seen images (if Redis available)
-  if (ctx.redis && ctx.constants && populated.length > 0) {
+  // Step 7: Track seen images
+  if (populated.length > 0) {
     console.log('[ImageFeed:populateDocuments] Tracking', populated.length, 'seen images');
     try {
-      await ctx.redis.packed.sAdd(
-        ctx.constants.REDIS_SYS_KEYS.QUEUES.SEEN_IMAGES,
+      await ctx.cache.sAdd(
+        FEED_REDIS_KEYS.QUEUES.SEEN_IMAGES,
         populated.map((i) => i.id)
       );
     } catch (err) {

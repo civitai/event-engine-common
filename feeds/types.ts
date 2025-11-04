@@ -1,48 +1,7 @@
 import { EntityType, EntityMetricMap } from '../types/metric-types';
 import * as caches from '../caches';
-import { IMeilisearchIndex, MeilisearchSearchOptions } from '../types/meilisearch-interface';
+import { IMeilisearchIndex } from '../types/meilisearch-interface';
 
-/**
- * Generic Redis client interface for feed features
- * Compatible with CustomRedisClient.packed from Civitai
- */
-export interface IRedisClient {
-  packed: {
-    mGet: <T>(keys: string[]) => Promise<(T | null)[]>;
-    set: <T>(key: string, value: T, options?: { EX?: number }) => Promise<void>;
-    sAdd: <T>(key: string, values: T[]) => Promise<void>;
-  };
-}
-
-/**
- * Generic feature flag client interface
- */
-export interface IFeatureFlagClient {
-  evaluateBoolean: (options: {
-    flagKey: string;
-    entityId: string;
-    context: Record<string, any>;
-  }) => Promise<{ enabled: boolean }> | { enabled: boolean };
-}
-
-/**
- * Generic constants interface for feed configuration
- */
-export interface IFeedConstants {
-  REDIS_SYS_KEYS: {
-    CACHES: {
-      IMAGE_EXISTS: string;
-    };
-    QUEUES: {
-      SEEN_IMAGES: string;
-    };
-  };
-  FLIPT_FEATURE_FLAGS: {
-    FEED_IMAGE_EXISTENCE: string;
-  };
-  nsfwRestrictedBaseModels?: string[];
-  nsfwBrowsingLevelsArray?: number[];
-}
 
 /**
  * Context provided to feed functions
@@ -60,6 +19,10 @@ export type FeedContext<E extends EntityType> = {
       name: K,
       ids: number[]
     ) => Promise<Awaited<ReturnType<(typeof caches)[K]['fetch']>>>;
+    // Direct Redis operations for feed-specific caching
+    mGet: <T>(keys: string[]) => Promise<(T | null)[]>;
+    set: <T>(key: string, value: T, options?: { EX?: number }) => Promise<void>;
+    sAdd: <T>(key: string, values: T[]) => Promise<void>;
   };
   metric: {
     fetch: (ids: number[]) => Promise<Record<number, EntityMetricMap[E]>>;
@@ -70,12 +33,6 @@ export type FeedContext<E extends EntityType> = {
     cursor?: string;
     offset?: number; // For offset-based pagination
   };
-  // Optional Redis client for advanced features (existence checking, tracking)
-  redis?: IRedisClient;
-  // Optional feature flag client for conditional behavior
-  flipt?: IFeatureFlagClient;
-  // Optional constants/configuration
-  constants?: IFeedConstants;
 };
 
 /**

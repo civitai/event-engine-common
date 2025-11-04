@@ -325,6 +325,9 @@ export type ImageQueryInput = {
   minorOnly?: boolean;
   blockedFor?: string[];
 
+  // Feature flags (evaluated by caller, not feed)
+  enableExistenceCheck?: boolean;
+
   // Population options (for conditional data fetching)
   include?: Array<
     'tags' |
