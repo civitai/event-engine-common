@@ -1076,6 +1076,15 @@ async function populateDocuments(
   const includeTagIds = include.includes('tagIds');
   const shouldFetchTags = includeTags || includeTagIds;
 
+  // Fetch data in parallel with proper typing for conditional fetches
+  type ProfilePictureData = Awaited<ReturnType<typeof ctx.cache.fetch<'profilePictures'>>>;
+  type UserCosmeticData = Awaited<ReturnType<typeof ctx.cache.fetch<'userCosmetics'>>>;
+  type ImageTagIdsData = Awaited<ReturnType<typeof ctx.cache.fetch<'imageTagIds'>>>;
+  type TagDataType = Awaited<ReturnType<typeof ctx.cache.fetch<'tagData'>>>;
+  type CosmeticDataType = Awaited<ReturnType<typeof ctx.cache.fetch<'cosmeticData'>>>;
+  type ImageMetaData = Record<number, { meta: unknown }>;
+  type ImageCosmeticsData = Record<number, unknown>;
+
   const [
     metricsData,
     usersData,
@@ -1091,40 +1100,40 @@ async function populateDocuments(
     ctx.cache.fetch('userData', userIds),
     include.includes('profilePictures')
       ? ctx.cache.fetch('profilePictures', userIds)
-      : Promise.resolve({}),
+      : (Promise.resolve({}) as Promise<ProfilePictureData>),
     include.includes('cosmetics')
       ? ctx.cache.fetch('userCosmetics', userIds)
-      : Promise.resolve({}),
+      : (Promise.resolve({}) as Promise<UserCosmeticData>),
     include.includes('cosmetics')
       ? fetchImageCosmetics(ctx, imageIds)
-      : Promise.resolve({}),
+      : (Promise.resolve({}) as Promise<ImageCosmeticsData>),
     include.includes('metaSelect')
       ? fetchImageMeta(ctx, imageIds)
-      : Promise.resolve({}),
+      : (Promise.resolve({}) as Promise<ImageMetaData>),
     fetchVideoMetadata(ctx, videoIds),
     fetchVideoThumbnails(ctx, videoIds),
     shouldFetchTags
       ? ctx.cache.fetch('imageTagIds', imageIds)
-      : Promise.resolve({}),
+      : (Promise.resolve({}) as Promise<ImageTagIdsData>),
   ]);
 
   // Step 5: Fetch tag data (only if tags or tagIds requested)
   const allTagIds = shouldFetchTags ? [...new Set(
     Object.values(imageTagIdsData).flatMap((img) =>
-      Array.isArray(img.tags) ? img.tags : []
+      Array.isArray(img?.tags) ? img.tags : []
     )
   )] : [];
-  const tagsData = allTagIds.length > 0
+  const tagsData: TagDataType = allTagIds.length > 0
     ? await ctx.cache.fetch('tagData', allTagIds)
     : {};
 
   // Step 6: Fetch cosmetic details for user cosmetics
   const cosmeticIds = [...new Set(
     Object.values(userCosmeticsData).flatMap((uc) =>
-      Array.isArray(uc.cosmetics) ? uc.cosmetics.map((c) => c.cosmeticId) : []
+      Array.isArray(uc?.cosmetics) ? uc.cosmetics.map((c) => c.cosmeticId) : []
     )
   )];
-  const cosmeticsData = cosmeticIds.length > 0
+  const cosmeticsData: CosmeticDataType = cosmeticIds.length > 0
     ? await ctx.cache.fetch('cosmeticData', cosmeticIds)
     : {};
 
@@ -1148,9 +1157,9 @@ async function populateDocuments(
 
     // User data
     const userData = usersData[doc.userId] ?? {};
-    const userCosmetics = userCosmeticsData[doc.userId] as { cosmetics: Array<{ cosmeticId: number; data: Record<string, unknown> }> } | undefined;
+    const userCosmetics = userCosmeticsData[doc.userId];
     const userCosmeticsArray = userCosmetics && Array.isArray(userCosmetics.cosmetics)
-      ? userCosmetics.cosmetics.map((uc: { cosmeticId: number; data: Record<string, unknown> }) => {
+      ? userCosmetics.cosmetics.map((uc) => {
           const cosmetic = cosmeticsData[uc.cosmeticId];
           return cosmetic
             ? {
@@ -1162,7 +1171,7 @@ async function populateDocuments(
                 userData: uc.data,
               }
             : null;
-        }).filter((c: any): c is NonNullable<typeof c> => c !== null)
+        }).filter((c): c is NonNullable<typeof c> => c !== null)
       : [];
 
     const user = {
