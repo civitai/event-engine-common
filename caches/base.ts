@@ -98,6 +98,17 @@ export function createCache<T extends object>(config: CacheConfig<T>) {
 
         for (const [key, value] of Object.entries(cacheResult)) {
           if (key === 'cachedAt') continue;
+
+          // Try to parse as JSON first (for arrays/objects)
+          if (value.startsWith('[') || value.startsWith('{')) {
+            try {
+              item[key] = JSON.parse(value);
+              continue;
+            } catch {
+              // Not valid JSON, fall through to string/number handling
+            }
+          }
+
           // Try to parse as number if it looks like one
           item[key] = isNaN(Number(value)) ? value : Number(value);
         }
@@ -201,7 +212,10 @@ export function createCache<T extends object>(config: CacheConfig<T>) {
             if (!dontCache.has(id) && !config.dontCacheFn?.(item)) {
               const toCache: Record<string, string> = { cachedAt: cachedAt.toISOString() };
               for (const [key, value] of Object.entries(item)) {
-                toCache[key] = String(value);
+                // Use JSON.stringify for arrays and objects, String() for primitives
+                toCache[key] = Array.isArray(value) || (typeof value === 'object' && value !== null)
+                  ? JSON.stringify(value)
+                  : String(value);
               }
 
               const EX = staleWhileRevalidate ? ttl * 2 : ttl;
@@ -318,7 +332,10 @@ export function createCache<T extends object>(config: CacheConfig<T>) {
         const item = dataMap[id];
         const toCache: Record<string, string> = { cachedAt: cachedAt.toISOString() };
         for (const [key, value] of Object.entries(item)) {
-          toCache[key] = String(value);
+          // Use JSON.stringify for arrays and objects, String() for primitives
+          toCache[key] = Array.isArray(value) || (typeof value === 'object' && value !== null)
+            ? JSON.stringify(value)
+            : String(value);
         }
 
         cacheOps.push(ctx.redis.hSet(`${config.redisKey}:${id}`, toCache));

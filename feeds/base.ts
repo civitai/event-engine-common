@@ -216,6 +216,14 @@ export function createFeed<
      * @param ids - Entity IDs to upsert
      * @param type - Type of update ('full' or 'metrics')
      */
+    /**
+     * Create documents without upserting to Meilisearch
+     * Useful for testing and debugging document generation
+     */
+    async createDocuments(ids: number[], type: UpsertType = 'full'): Promise<TDoc[]> {
+      return await config.createDocuments(this.context, ids, type);
+    }
+
     async upsert(ids: number[], type: UpsertType = 'full'): Promise<void> {
       await this.configure(); // Ensure index is configured for write operations
 

@@ -8,9 +8,17 @@ export type ImageTagIds = {
   tags: number[];
 };
 
+// Tags to always include even when filtering Rekognition tags
+const ALWAYS_INCLUDE_TAGS = ['anime', 'cartoon', 'comics', 'manga', 'man', 'woman', 'men', 'women'];
+
 /**
  * Cache for image tag IDs
  * Fetches tag IDs associated with images, filtering out disabled tags
+ *
+ * Special filtering: When an image has both WD14 and Rekognition tags,
+ * Rekognition tags are filtered out EXCEPT for:
+ * - Moderation type tags
+ * - Tags in ALWAYS_INCLUDE_TAGS (styles and subjects)
  */
 export const imageTagIds = createCache<ImageTagIds>({
   redisKey: 'image:tagIds',
@@ -32,13 +40,48 @@ export const imageTagIds = createCache<ImageTagIds>({
       [ids]
     );
 
-    // Group by image and collect tag IDs
+    // Fetch tag metadata for filtering
+    const tagIds = [...new Set(imageTags.map(t => t.tagId))];
+    const tags = await ctx.pg.query<{
+      id: number;
+      name: string;
+      type: string;
+    }>(
+      `SELECT id, name, type FROM "Tag" WHERE id = ANY($1)`,
+      [tagIds]
+    );
+
+    const tagMap = new Map(tags.map(t => [t.id, t]));
+
+    // Check which images have WD14 tags
+    const hasWD14: Record<number, boolean> = {};
+    for (const row of imageTags) {
+      hasWD14[row.imageId] ??= false;
+      if (row.source === 'WD14') hasWD14[row.imageId] = true;
+    }
+
+    // Group by image and collect tag IDs with filtering
     const grouped = imageTags.reduce<Record<number, ImageTagIds>>((acc, row) => {
       const key = row.imageId;
       if (!acc[key]) {
         acc[key] = { imageId: row.imageId, tags: [] };
       }
-      acc[key].tags.push(row.tagId);
+
+      const tag = tagMap.get(row.tagId);
+      if (!tag) return acc;
+
+      // Apply filtering logic: if image has WD14 tags, filter Rekognition tags
+      let canAdd = true;
+      if (row.source === 'Rekognition' && hasWD14[row.imageId]) {
+        // Keep only Moderation tags or tags in ALWAYS_INCLUDE_TAGS
+        if (tag.type !== 'Moderation' && !ALWAYS_INCLUDE_TAGS.includes(tag.name)) {
+          canAdd = false;
+        }
+      }
+
+      if (canAdd) {
+        acc[key].tags.push(row.tagId);
+      }
       return acc;
     }, {});
 
