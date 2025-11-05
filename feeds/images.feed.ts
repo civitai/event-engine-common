@@ -11,7 +11,7 @@ import type {
 } from '../types/image-feed-types';
 import {
   NsfwLevel,
-  Availability, 
+  Availability,
   browsingLevelToArray,
   includesNsfwContent,
   onlySelectableLevels,
@@ -1273,6 +1273,10 @@ async function populateDocuments(
 export const ImagesFeed = createFeed({
   entityType: 'Image' as const,
   name: 'metrics_images_v1',
+  connection: {
+    host: process.env.FEED_IMAGE_HOST,
+    apiKey: process.env.FEED_IMAGE_API_KEY,
+  },
   schema,
   createDocuments,
   queryDocuments,

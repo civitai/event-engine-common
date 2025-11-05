@@ -52,11 +52,32 @@ export type MeilisearchFullTask = {
 };
 
 /**
+ * Granular filterable attribute configuration
+ * Matches the Meilisearch library's GranularFilterableAttribute type
+ */
+export type GranularFilterableAttribute = {
+  attributePatterns: string[];
+  features: {
+    facetSearch: boolean;
+    filter: {
+      equality: boolean;
+      comparison: boolean;
+    };
+  };
+};
+
+/**
+ * Filterable attributes can be either strings or granular configurations
+ * Matches the Meilisearch library's FilterableAttributes type
+ */
+export type FilterableAttributes = (string | GranularFilterableAttribute)[] | null;
+
+/**
  * Meilisearch settings type
  * Note: Using flexible types to match the actual Meilisearch library types
  */
 export type MeilisearchSettings = {
-  filterableAttributes?: string[] | null;
+  filterableAttributes?: FilterableAttributes;
   sortableAttributes?: string[] | null;
   searchableAttributes?: string[] | null;
   displayedAttributes?: string[] | null;
@@ -80,26 +101,42 @@ export type MeilisearchSearchOptions = {
 /**
  * Hit type returned in search results
  * The actual library adds metadata fields to documents
+ * Matches the Hit type from meilisearch library
+ * Using any as default to match library's RecordAny
  */
-export type MeilisearchHit<T = Record<string, unknown>> = T & {
+export type MeilisearchHit<T = any> = T & {
   _formatted?: Partial<T>;
   _matchesPosition?: unknown;
   _rankingScore?: number;
   _rankingScoreDetails?: unknown;
   _geo?: unknown;
+  _federation?: unknown;
+  [key: string]: unknown; // Allow additional metadata fields
 };
 
 /**
  * Search result type
  * Compatible with SearchResponse from meilisearch library
+ * Includes both finite pagination (page-based) and infinite pagination (offset-based) fields
+ * Using any as default to match library's RecordAny
  */
-export type MeilisearchSearchResult<T = Record<string, unknown>> = {
+export type MeilisearchSearchResult<T = any> = {
   hits: MeilisearchHit<T>[];
+  processingTimeMs: number;
+  query: string;
+  // Infinite pagination fields
   estimatedTotalHits?: number;
   offset?: number;
   limit?: number;
-  processingTimeMs?: number;
-  query?: string;
+  // Finite pagination fields
+  totalHits?: number;
+  hitsPerPage?: number;
+  page?: number;
+  totalPages?: number;
+  // Additional optional fields
+  facetDistribution?: Record<string, Record<string, number>>;
+  facetStats?: Record<string, { min: number; max: number }>;
+  facetsByIndex?: Record<string, unknown>;
   [key: string]: unknown; // Allow additional properties
 };
 
@@ -150,11 +187,12 @@ export interface IMeilisearchIndex {
   /**
    * Search documents
    * Returns search results with hits matching the document type
+   * Using any for compatibility with library's complex SearchResponse type
    */
-  search<T = Record<string, unknown>>(
+  search<T = any>(
     query: string | null,
-    options?: MeilisearchSearchOptions
-  ): Promise<MeilisearchSearchResult<T>>;
+    options?: any
+  ): Promise<any>;
 }
 
 export interface IMeilisearch {

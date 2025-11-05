@@ -127,8 +127,8 @@ export type CreateFeedConfig<
   entityType: E;
   name: string;
   connection?: {
-    host: string;
-    apiKey: string;
+    host?: string;
+    apiKey?: string;
   };
   schema: TSchema;
   createDocuments: (

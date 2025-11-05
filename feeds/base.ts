@@ -54,13 +54,16 @@ export function createFeed<
     private configured = false;
 
     constructor(
-      meilisearch: IMeilisearch,
+      meilisearchInitializer: (config: {apiKey: string, host: string}) => IMeilisearch,
       ch: IClickhouseClient,
       pg: IDbClient,
       metricService: MetricService,
       cacheService: CacheService
     ) {
-      this.client = meilisearch;
+      this.client = meilisearchInitializer({
+        apiKey: config.connection?.apiKey ?? process.env.FEED_API_KEY ?? '',
+        host: config.connection?.host ?? process.env.FEED_HOST ?? 'http://localhost:7700',
+      });
 
       // Read-only initialization: just get the index reference
       console.log(`[Feed:${config.name}] Initializing feed (read-only)...`);
