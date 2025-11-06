@@ -81,6 +81,7 @@ export class CacheService {
    * Provides direct access to Redis for feed operations
    */
   async mGet<T>(keys: string[]): Promise<(T | null)[]> {
+    if (!this.context.redis.packed) throw new Error('Redis packed methods not available');
     return this.context.redis.packed.mGet<T>(keys);
   }
 
@@ -89,6 +90,7 @@ export class CacheService {
    * Provides direct access to Redis for feed operations
    */
   async set<T>(key: string, value: T, options?: { EX?: number }): Promise<void> {
+    if (!this.context.redis.packed) throw new Error('Redis packed methods not available');
     return this.context.redis.packed.set<T>(key, value, options);
   }
 
@@ -97,6 +99,7 @@ export class CacheService {
    * Provides direct access to Redis for feed operations
    */
   async sAdd<T>(key: string, values: T[]): Promise<void> {
+    if (!this.context.redis.packed) throw new Error('Redis packed methods not available');
     return this.context.redis.packed.sAdd<T>(key, values);
   }
 }

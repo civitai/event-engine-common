@@ -46,12 +46,12 @@ export function createFeed<
   };
 
   class Feed {
-    private client: IMeilisearch;
-    private context!: FeedContext<E>;
-    private index: IMeilisearchIndex | undefined;
-    private indexError: Error | undefined;
-    private indexReady: Promise<boolean>;
-    private configured = false;
+    public client: IMeilisearch;
+    public context!: FeedContext<E>;
+    public index: IMeilisearchIndex | undefined;
+    public indexError: Error | undefined;
+    public indexReady: Promise<boolean>;
+    public configured = false;
 
     constructor(
       meilisearchInitializer: (config: {apiKey: string, host: string}) => IMeilisearch,
@@ -124,7 +124,7 @@ export function createFeed<
     /**
      * Wait for index to be ready
      */
-    private async ready() {
+    public async ready() {
       if (!(await this.indexReady))
         throw this.indexError ?? new Error('Index failed to initialize');
       if (!this.index) throw new Error('Index not available');

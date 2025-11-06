@@ -87,7 +87,8 @@ export interface IRedisClient extends ToClient<RedisCommands> {
   multi(): IRedisMulti;
   sendCommand?(...args: any[]): any;
   // Packed methods for msgpackr serialization (from CustomRedisClient)
-  packed: {
+  // Optional - not all Redis clients provide packed methods
+  packed?: {
     get<T>(key: string): Promise<T | null>;
     mGet<T>(keys: string[]): Promise<(T | null)[]>;
     set<T>(key: string, value: T, options?: { EX?: number }): Promise<void>;
