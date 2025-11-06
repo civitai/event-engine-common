@@ -980,6 +980,7 @@ async function populateDocuments(
   } else {
     // SMART CACHE EXISTENCE CHECK (feature-flagged)
     console.log('[ImageFeed:populateDocuments] Using smart cache check');
+    console.log(ctx.cache);
     const uniqueIds = [...new Set(imageIdsForExistence)];
     const cachePrefix = `${FEED_REDIS_KEYS.CACHES.IMAGE_EXISTS}:`;
     const cacheKeys = uniqueIds.map((id) => `${cachePrefix}${id}`);
