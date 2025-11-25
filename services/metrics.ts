@@ -289,7 +289,7 @@ export class MetricService {
             entityId,
             metricType,
             sum(total) AS value
-          FROM entityMetricDailyAgg
+          FROM entityMetricDailyAgg_new
           WHERE entityType = '${entityType}'
             AND entityId IN (${batch})
             AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
@@ -354,7 +354,7 @@ export class MetricService {
             sumIf(total, day >= subtractMonths(today(), 1)) AS Month,
             sumIf(total, day >= subtractYears(today(), 1))  AS Year,
             sum(total) AS AllTime
-          FROM entityMetricDailyAgg
+          FROM entityMetricDailyAgg_new
           WHERE entityType = '${entityType}'
             AND entityId IN (${batch})
             AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
