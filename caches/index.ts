@@ -4,7 +4,7 @@
  */
 
 export { userData } from './userData.cache';
-export { modelData } from './modelData.cache';
+export { modelData, modelFullData, modelTagIds } from './modelData.cache';
 export {
   imageTagIds,
   tagData,
@@ -15,7 +15,7 @@ export {
 
 // Export types
 export type { UserCacheData } from './userData.cache';
-export type { ModelCacheData } from './modelData.cache';
+export type { ModelCacheData, ModelTagIdsData } from './modelData.cache';
 export type {
   ImageTagIds,
   TagData,

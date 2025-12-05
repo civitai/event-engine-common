@@ -4,9 +4,7 @@
  */
 
 export { ImagesFeed } from './images.feed';
-// The simple example has been replaced with the full implementation
-
-// Add other feeds as needed (ModelFeed, PostFeed, etc.)
+export { ModelsFeed } from './models.feed';
 
 // Export types
 export type {

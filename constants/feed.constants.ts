@@ -34,8 +34,17 @@ export const NSFW_RESTRICTED_BASE_MODELS = [
 export const FEED_REDIS_KEYS = {
   CACHES: {
     IMAGE_EXISTS: 'system:image-exists',
+    MODEL_EXISTS: 'system:model-exists',
   },
   QUEUES: {
     SEEN_IMAGES: 'queues:seen-images',
+    SEEN_MODELS: 'queues:seen-models',
   },
 } as const;
+
+/**
+ * Collection ID for featured models
+ * Used for isFeatured filter in model queries
+ * This should match the actual collection ID in the database
+ */
+export const FEATURED_MODEL_COLLECTION_ID = 2905444;
