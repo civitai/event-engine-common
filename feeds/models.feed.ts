@@ -48,7 +48,8 @@ const schema = {
   name: { type: 'string' as const },
   type: { type: 'string' as const, filterable: true },
   nsfw: { type: 'boolean' as const, filterable: true },
-  nsfwLevel: { type: 'number' as const, filterable: true },
+  // Store nsfwLevel as array of individual levels (powers of 2) for easier Meilisearch filtering
+  nsfwLevels: { type: 'array' as const, arrayType: 'number' as const, filterable: true },
   minor: { type: 'boolean' as const, filterable: true },
   poi: { type: 'boolean' as const, filterable: true },
   sfwOnly: { type: 'boolean' as const, filterable: true },
@@ -267,7 +268,8 @@ async function createDocuments(
         name: model.name,
         type: model.type,
         nsfw: model.nsfw,
-        nsfwLevel: model.nsfwLevel,
+        // Convert composite nsfwLevel to array of individual levels for Meilisearch filtering
+        nsfwLevels: browsingLevelToArray(model.nsfwLevel),
         minor: model.minor,
         poi: model.poi,
         sfwOnly: model.sfwOnly,
@@ -475,9 +477,11 @@ async function queryDocuments(
     // ========================================================================
 
     // NSFW Level filtering
+    // nsfwLevels is stored as array of individual levels (powers of 2)
+    // Filter matches if ANY element of document's nsfwLevels is in user's allowed levels
     if (browsingLevel) {
       const levels = browsingLevelToArray(browsingLevel);
-      filters.push(makeFilter('nsfwLevel', `IN [${levels.join(',')}]`));
+      filters.push(makeFilter('nsfwLevels', `IN [${levels.join(',')}]`));
     }
 
     // POI/Minor filtering
@@ -509,12 +513,14 @@ async function queryDocuments(
     if (availability) {
       filters.push(makeFilter('availability', `= '${availability}'`));
     } else if (!isModerator) {
-      filters.push(makeFilter('availability', `!= 'Private'`));
+      // Use IS NULL OR to handle null values correctly in Meilisearch
+      filters.push(`(availability IS NULL OR availability != 'Private')`);
     }
 
-    // Archived filtering
+    // Archived filtering - must handle null mode values
     if (!archived) {
-      filters.push(makeFilter('mode', `!= 'Archived'`));
+      // Most models have mode = null, so we need to include those
+      filters.push(`(mode IS NULL OR mode != 'Archived')`);
     }
 
     // Type filtering
@@ -1053,7 +1059,8 @@ async function populateDocuments(
       name: doc.name,
       type: doc.type,
       nsfw: doc.nsfw,
-      nsfwLevel: doc.nsfwLevel,
+      // Convert nsfwLevels array back to composite value for legacy output
+      nsfwLevel: doc.nsfwLevels.reduce((acc, level) => acc | level, 0),
       minor: doc.minor,
       poi: doc.poi,
       sfwOnly: doc.sfwOnly,

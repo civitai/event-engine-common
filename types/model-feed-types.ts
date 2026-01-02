@@ -210,7 +210,8 @@ export interface ModelDocument {
   name: string;
   type: string;
   nsfw: boolean;
-  nsfwLevel: number;
+  // Array of individual NSFW levels (powers of 2: 1, 2, 4, 8, 16) for Meilisearch filtering
+  nsfwLevels: number[];
   minor: boolean;
   poi: boolean;
   sfwOnly: boolean;
@@ -590,6 +591,23 @@ export function browsingLevelToArray(flag: number): number[] {
     }
   }
   return levels;
+}
+
+/**
+ * Get all valid nsfwLevel values that pass bitwise AND check with browsingLevel.
+ * This is needed because Meilisearch doesn't support bitwise operations.
+ * Documents have composite nsfwLevel values (e.g., 15 = 1+2+4+8), not just single levels.
+ * A document is visible if (document.nsfwLevel & browsingLevel) != 0
+ */
+export function getValidNsfwLevels(browsingLevel: number): number[] {
+  const valid: number[] = [];
+  // Max possible nsfwLevel is 31 (1+2+4+8+16)
+  for (let i = 1; i <= 31; i++) {
+    if ((i & browsingLevel) !== 0) {
+      valid.push(i);
+    }
+  }
+  return valid;
 }
 
 /**
