@@ -422,6 +422,9 @@ async function queryDocuments(
 
   console.log('[ImageFeed:queryDocuments] Step 1: Building basic filters...');
 
+  // Only show images that belong to a post
+  filters.push(makeFilter('postId', 'IS NOT NULL'));
+
   // Combine postId into postIds array
   if (postId) {
     postIds = [...postIds, postId];
