@@ -427,6 +427,9 @@ async function queryDocuments(
 
   console.log('[ImageFeed:queryDocuments] Step 1: Building basic filters...');
 
+  // Only show images that belong to a post
+  filters.push(makeFilter('postId', 'IS NOT NULL'));
+
   // Combine postId into postIds array
   if (postId) {
     postIds = [...postIds, postId];
@@ -1254,19 +1257,6 @@ async function populateDocuments(
       thumbnailUrl: thumbnail?.url,
     };
   });
-
-  // Step 7: Track seen images
-  if (populated.length > 0) {
-    console.log('[ImageFeed:populateDocuments] Tracking', populated.length, 'seen images');
-    try {
-      await ctx.cache.sAdd(
-        FEED_REDIS_KEYS.QUEUES.SEEN_IMAGES,
-        populated.map((i) => i.id)
-      );
-    } catch (err) {
-      console.error('[ImageFeed:populateDocuments] Error tracking seen images:', err);
-    }
-  }
 
   console.log('[ImageFeed:populateDocuments] Completed, returning', populated.length, 'populated images');
   return populated;

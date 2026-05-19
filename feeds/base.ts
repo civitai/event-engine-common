@@ -341,12 +341,21 @@ export function createFeed<
      * Populate documents with related data
      * Document and return types are inferred from config
      * Input parameter is passed for post-filtering and conditional data fetching
+     *
+     * @param docs - Documents to populate
+     * @param input - Input parameters for filtering/conditional fetching
+     * @param options - Optional settings
+     * @param options.skipIndexCheck - Skip index availability check (for testing without index)
      */
-    async populate(docs: TDoc[], input: TInput): Promise<TPop[]> {
+    async populate(docs: TDoc[], input: TInput, options?: { skipIndexCheck?: boolean }): Promise<TPop[]> {
       console.log(`[Feed:${config.name}] Populate started with ${docs.length} documents`);
       const populateStart = Date.now();
 
-      await this.ready();
+      // In production, ensure index is ready; in dev/test mode, allow bypassing
+      if (!options?.skipIndexCheck) {
+        await this.ready();
+      }
+
       const populatedDocs = await config.populateDocuments(this.context, docs, input);
 
       console.log(`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);

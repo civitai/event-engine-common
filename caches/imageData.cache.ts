@@ -215,12 +215,14 @@ export const userCosmetics = createCache<UserCosmeticData>({
 export type ProfilePictureData = {
   userId: number;
   id: number;
+  name: string | null;
   url: string;
   nsfwLevel: number;
-  hash: string;
+  hash: string | null;
+  ingestion: string;
   type: string;
-  width: number;
-  height: number;
+  width: number | null;
+  height: number | null;
   metadata: Record<string, unknown> | null;
 };
 
@@ -236,9 +238,11 @@ export const profilePictures = createCache<ProfilePictureData>({
       `SELECT
         u.id as "userId",
         i.id,
+        i.name,
         i.url,
         i."nsfwLevel",
         i.hash,
+        i.ingestion,
         i.type,
         i.width,
         i.height,
