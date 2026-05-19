@@ -200,10 +200,15 @@ async function createDocuments(
             ELSE FALSE
           END
         ) AS "hasPositivePrompt",
+        -- Mirror of src/server/utils/image-onsite.ts (imageOnSiteSql).
+        -- Keep in sync if the predicate changes.
         (
           CASE
-            WHEN (i.meta->>'civitaiResources' IS NOT NULL AND NOT (i.meta ? 'Version'))
-              OR i.meta->>'workflow' IS NOT NULL
+            WHEN (
+              i.meta->>'civitaiResources' IS NOT NULL
+              AND NOT (i.meta ? 'Version')
+              AND (NOT (i.meta ? 'Model') OR (i.meta->>'Model') LIKE 'urn:air:%')
+            )
             THEN TRUE
             ELSE FALSE
           END
