@@ -1,4 +1,5 @@
 import { EntityType } from '../types/metric-types';
+import { logger } from '../utils/logger';
 import { IMeilisearch, IMeilisearchIndex } from '../types/meilisearch-interface';
 import { IClickhouseClient, IDbClient } from '../types/package-stubs';
 import { MetricService } from '../services/metrics';
@@ -66,13 +67,13 @@ export function createFeed<
       });
 
       // Read-only initialization: just get the index reference
-      console.log(`[Feed:${config.name}] Initializing feed (read-only)...`);
+      logger.debug('Feed',`[Feed:${config.name}] Initializing feed (read-only)...`);
       const initStart = Date.now();
 
       this.indexReady = this.client.getIndex(config.name)
         .then((index) => {
           this.index = index;
-          console.log(`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
+          logger.debug('Feed',`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
           return true;
         })
         .catch((err) => {
@@ -142,7 +143,7 @@ export function createFeed<
     async configure(): Promise<void> {
       if (this.configured) return; // Already configured
 
-      console.log(`[Feed:${config.name}] Configuring index for write operations...`);
+      logger.debug('Feed',`[Feed:${config.name}] Configuring index for write operations...`);
       const configStart = Date.now();
 
       // Ensure we can access the index
@@ -153,11 +154,11 @@ export function createFeed<
         this.index = await this.client.getIndex(config.name);
       } catch (e: any) {
         if (e.code === 'index_not_found') {
-          console.log(`[Feed:${config.name}] Index not found, creating...`);
+          logger.debug('Feed',`[Feed:${config.name}] Index not found, creating...`);
           const task = await this.client.createIndex(config.name, { primaryKey: 'id' });
           await this.client.tasks.waitForTask(task.taskUid);
           this.index = await this.client.getIndex(config.name);
-          console.log(`[Feed:${config.name}] Index created successfully`);
+          logger.debug('Feed',`[Feed:${config.name}] Index created successfully`);
         } else {
           throw e;
         }
@@ -166,7 +167,7 @@ export function createFeed<
       // Get current settings to avoid unnecessary updates
       const settingsStart = Date.now();
       const currentSettings = await this.index.getSettings();
-      console.log(`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
+      logger.debug('Feed',`[Feed:${config.name}] Settings fetched in ${Date.now() - settingsStart}ms`);
 
       // Configure index based on schema
       const sortable: string[] = [];
@@ -185,25 +186,25 @@ export function createFeed<
         JSON.stringify(filterable.sort()) !==
         JSON.stringify((currentSettings.filterableAttributes ?? []).sort());
 
-      console.log(`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
-      console.log(`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
+      logger.debug('Feed',`[Feed:${config.name}] Schema: ${sortable.length} sortable, ${filterable.length} filterable`);
+      logger.debug('Feed',`[Feed:${config.name}] Updates needed: sortable=${sortableChanged}, filterable=${filterableChanged}`);
 
       // Update attributes synchronously to ensure they're set before writes
       if (sortableChanged && sortable.length) {
-        console.log(`[Feed:${config.name}] Updating sortable attributes`);
+        logger.debug('Feed',`[Feed:${config.name}] Updating sortable attributes`);
         const task = await this.index.updateSortableAttributes(sortable);
         await this.client.tasks.waitForTask(task.taskUid);
-        console.log(`[Feed:${config.name}] Sortable attributes updated successfully`);
+        logger.debug('Feed',`[Feed:${config.name}] Sortable attributes updated successfully`);
       }
       if (filterableChanged && filterable.length) {
-        console.log(`[Feed:${config.name}] Updating filterable attributes`);
+        logger.debug('Feed',`[Feed:${config.name}] Updating filterable attributes`);
         const task = await this.index.updateFilterableAttributes(filterable);
         await this.client.tasks.waitForTask(task.taskUid);
-        console.log(`[Feed:${config.name}] Filterable attributes updated successfully`);
+        logger.debug('Feed',`[Feed:${config.name}] Filterable attributes updated successfully`);
       }
 
       this.configured = true;
-      console.log(`[Feed:${config.name}] Configuration complete in ${Date.now() - configStart}ms`);
+      logger.debug('Feed',`[Feed:${config.name}] Configuration complete in ${Date.now() - configStart}ms`);
     }
 
     /**
@@ -258,7 +259,7 @@ export function createFeed<
      * Returns data array and next cursor for pagination
      */
     async query(input: FeedQueryInput<TInput>): Promise<FeedResult<TDoc>> {
-      console.log(`[Feed:${config.name}] Query started with input:`, JSON.stringify(input, null, 2));
+      logger.debug('Feed',`[Feed:${config.name}] Query started with input:`, JSON.stringify(input, null, 2));
       const queryStart = Date.now();
 
       await this.ready();
@@ -276,11 +277,11 @@ export function createFeed<
         if (parts.length === 2) {
           offset = parseInt(parts[0]) || 0;
           entry = parts[1];
-          console.log(`[Feed:${config.name}] Parsed cursor: offset=${offset}, entry=${entry}`);
+          logger.debug('Feed',`[Feed:${config.name}] Parsed cursor: offset=${offset}, entry=${entry}`);
         } else if (parts.length === 1) {
           // Fallback: if cursor is just a number, treat it as offset
           offset = parseInt(parts[0]) || 0;
-          console.log(`[Feed:${config.name}] Parsed cursor as offset only: ${offset}`);
+          logger.debug('Feed',`[Feed:${config.name}] Parsed cursor as offset only: ${offset}`);
         } else {
           console.warn(`[Feed:${config.name}] Invalid cursor format, expected 'offset|timestamp', got:`, cursor);
         }
@@ -307,7 +308,7 @@ export function createFeed<
         data = docs.slice(0, limit);
         const lastItem = data[limit - 1] as Record<string, unknown>;
 
-        console.log(`[Feed:${config.name}] More results available (${docs.length} > ${limit}), generating cursor from last returned item`);
+        logger.debug('Feed',`[Feed:${config.name}] More results available (${docs.length} > ${limit}), generating cursor from last returned item`);
 
         // Calculate new offset for next page
         const newOffset = offset + limit;
@@ -316,24 +317,24 @@ export function createFeed<
         let timestamp: string | number;
         if (config.getCursor) {
           timestamp = config.getCursor(lastItem as TDoc);
-          console.log(`[Feed:${config.name}] Got timestamp from getCursor():`, timestamp);
+          logger.debug('Feed',`[Feed:${config.name}] Got timestamp from getCursor():`, timestamp);
         } else {
           // Default: use sortAtUnix or sortAt or id
           timestamp = (lastItem.sortAtUnix as number) || (lastItem.sortAt as number) || (lastItem.id as number);
-          console.log(`[Feed:${config.name}] Using default timestamp:`, timestamp);
+          logger.debug('Feed',`[Feed:${config.name}] Using default timestamp:`, timestamp);
         }
 
         // Generate cursor in format "offset|timestamp"
         nextCursor = `${newOffset}|${timestamp}`;
-        console.log(`[Feed:${config.name}] Generated cursor:`, nextCursor);
+        logger.debug('Feed',`[Feed:${config.name}] Generated cursor:`, nextCursor);
       } else {
         // No more results
         data = docs;
         nextCursor = undefined;
-        console.log(`[Feed:${config.name}] No more results available (${docs.length} <= ${limit}), no cursor generated`);
+        logger.debug('Feed',`[Feed:${config.name}] No more results available (${docs.length} <= ${limit}), no cursor generated`);
       }
 
-      console.log(`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
+      logger.debug('Feed',`[Feed:${config.name}] Query completed in ${Date.now() - queryStart}ms, returned ${data.length} documents, nextCursor: ${nextCursor}`);
       return { items: data, nextCursor };
     }
 
@@ -348,7 +349,7 @@ export function createFeed<
      * @param options.skipIndexCheck - Skip index availability check (for testing without index)
      */
     async populate(docs: TDoc[], input: TInput, options?: { skipIndexCheck?: boolean }): Promise<TPop[]> {
-      console.log(`[Feed:${config.name}] Populate started with ${docs.length} documents`);
+      logger.debug('Feed',`[Feed:${config.name}] Populate started with ${docs.length} documents`);
       const populateStart = Date.now();
 
       // In production, ensure index is ready; in dev/test mode, allow bypassing
@@ -358,7 +359,7 @@ export function createFeed<
 
       const populatedDocs = await config.populateDocuments(this.context, docs, input);
 
-      console.log(`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);
+      logger.debug('Feed',`[Feed:${config.name}] Populate completed in ${Date.now() - populateStart}ms`);
       return populatedDocs;
     }
 
