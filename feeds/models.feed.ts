@@ -1,4 +1,5 @@
 import { createFeed } from './base';
+import { logger } from '../utils/logger';
 import type { FeedContext } from './types';
 import type {
   ModelDocument,
@@ -337,7 +338,7 @@ async function queryDocuments(
   ctx: FeedContext<'Model'>,
   input: ModelQueryInput
 ): Promise<ModelDocument[]> {
-  console.log('[ModelFeed:queryDocuments] Starting query with input:', {
+  logger.modelFeed('[ModelFeed:queryDocuments] Starting query with input:', {
     sort: input.sort,
     userId: input.userId,
     browsingLevel: input.browsingLevel,
@@ -405,7 +406,7 @@ async function queryDocuments(
         [input.username]
       );
       if (userResult.length === 0) {
-        console.log('[ModelFeed:queryDocuments] User not found, returning empty');
+        logger.modelFeed('[ModelFeed:queryDocuments] User not found, returning empty');
         return [];
       }
       userId = userResult[0].id;
@@ -419,7 +420,7 @@ async function queryDocuments(
         [currentUserId]
       );
       if (followed.length === 0) {
-        console.log('[ModelFeed:queryDocuments] No followed users, returning empty');
+        logger.modelFeed('[ModelFeed:queryDocuments] No followed users, returning empty');
         return [];
       }
       const followedUserIds = followed.map((f) => f.targetUserId);
@@ -434,7 +435,7 @@ async function queryDocuments(
         [currentUserId]
       );
       if (hidden.length === 0) {
-        console.log('[ModelFeed:queryDocuments] No hidden models, returning empty');
+        logger.modelFeed('[ModelFeed:queryDocuments] No hidden models, returning empty');
         return [];
       }
       const hiddenModelIds = hidden.map((h) => h.modelId);
@@ -450,7 +451,7 @@ async function queryDocuments(
         [collectionId]
       );
       if (collectionModels.length === 0) {
-        console.log('[ModelFeed:queryDocuments] No models in collection, returning empty');
+        logger.modelFeed('[ModelFeed:queryDocuments] No models in collection, returning empty');
         return [];
       }
       const collectionModelIds = collectionModels.map((c) => c.modelId);
@@ -465,7 +466,7 @@ async function queryDocuments(
         [FEATURED_MODEL_COLLECTION_ID]
       );
       if (featured.length === 0) {
-        console.log('[ModelFeed:queryDocuments] No featured models, returning empty');
+        logger.modelFeed('[ModelFeed:queryDocuments] No featured models, returning empty');
         return [];
       }
       const featuredModelIds = featured.map((f) => f.modelId);
@@ -625,7 +626,7 @@ async function queryDocuments(
     const { limit, offset = 0 } = ctx.pagination;
     const finalFilter = filters.length ? filters.join(' AND ') : undefined;
 
-    console.log('[ModelFeed:queryDocuments] Final search params:', {
+    logger.modelFeed('[ModelFeed:queryDocuments] Final search params:', {
       query,
       filterCount: filters.length,
       sorts,
@@ -641,8 +642,8 @@ async function queryDocuments(
       offset,
     });
 
-    console.log(`[ModelFeed:queryDocuments] Search completed in ${Date.now() - searchStart}ms, returned ${result.hits.length} hits`);
-    console.log(`[ModelFeed:queryDocuments] Total query time: ${Date.now() - queryStart}ms`);
+    logger.modelFeed(`[ModelFeed:queryDocuments] Search completed in ${Date.now() - searchStart}ms, returned ${result.hits.length} hits`);
+    logger.modelFeed(`[ModelFeed:queryDocuments] Total query time: ${Date.now() - queryStart}ms`);
 
     return result.hits;
 
@@ -752,7 +753,7 @@ async function populateDocuments(
   documents: ModelDocument[],
   input: ModelQueryInput
 ): Promise<PopulatedModel[]> {
-  console.log('[ModelFeed:populateDocuments] Starting with', documents.length, 'documents');
+  logger.modelFeed('[ModelFeed:populateDocuments] Starting with', documents.length, 'documents');
 
   if (documents.length === 0) return [];
 
@@ -767,7 +768,7 @@ async function populateDocuments(
   // Step 1: Fetch all required data in parallel
   // ========================================================================
 
-  console.log('[ModelFeed:populateDocuments] Fetching data for', modelIds.length, 'models,', userIds.length, 'users');
+  logger.modelFeed('[ModelFeed:populateDocuments] Fetching data for', modelIds.length, 'models,', userIds.length, 'users');
 
   // Type aliases for cache results
   type ModelFullDataResult = Awaited<ReturnType<typeof ctx.cache.fetch<'modelFullData'>>>;
@@ -832,7 +833,7 @@ async function populateDocuments(
   // Step 2: Filter versions and collect version IDs for image fetching
   // ========================================================================
 
-  console.log('[ModelFeed:populateDocuments] Filtering versions...');
+  logger.modelFeed('[ModelFeed:populateDocuments] Filtering versions...');
 
   const nsfwRestrictedBaseModels = input.nsfwRestrictedBaseModels ?? NSFW_RESTRICTED_BASE_MODELS;
 
@@ -901,7 +902,7 @@ async function populateDocuments(
     filteredModels.push({ doc, data, version });
   }
 
-  console.log('[ModelFeed:populateDocuments] Filtered to', filteredModels.length, 'models with valid versions');
+  logger.modelFeed('[ModelFeed:populateDocuments] Filtered to', filteredModels.length, 'models with valid versions');
 
   // ========================================================================
   // Step 3: Fetch images for model versions
@@ -966,7 +967,7 @@ async function populateDocuments(
   // Step 5: Transform to output format
   // ========================================================================
 
-  console.log('[ModelFeed:populateDocuments] Building populated models...');
+  logger.modelFeed('[ModelFeed:populateDocuments] Building populated models...');
 
   const populated: PopulatedModel[] = [];
 
@@ -1095,7 +1096,7 @@ async function populateDocuments(
     });
   }
 
-  console.log('[ModelFeed:populateDocuments] Completed, returning', populated.length, 'populated models');
+  logger.modelFeed('[ModelFeed:populateDocuments] Completed, returning', populated.length, 'populated models');
   return populated;
 }
 

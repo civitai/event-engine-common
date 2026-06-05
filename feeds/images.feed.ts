@@ -1,4 +1,5 @@
 import { createFeed } from './base';
+import { logger } from '../utils/logger';
 import type { FeedContext } from './types';
 import type {
   ImageDocument,
@@ -372,7 +373,7 @@ async function queryDocuments(
   ctx: FeedContext<'Image'>,
   input: ImageQueryInput
 ): Promise<ImageDocument[]> {
-  console.log('[ImageFeed:queryDocuments] Starting query with input:', {
+  logger.imageFeed('[ImageFeed:queryDocuments] Starting query with input:', {
     sort: input.sort,
     userId: input.userId,
     browsingLevel: input.browsingLevel,
@@ -425,7 +426,7 @@ async function queryDocuments(
   const sorts: string[] = [];
   const filters: string[] = [];
 
-  console.log('[ImageFeed:queryDocuments] Step 1: Building basic filters...');
+  logger.imageFeed('[ImageFeed:queryDocuments] Step 1: Building basic filters...');
 
   // Only show images that belong to a post
   filters.push(makeFilter('postId', 'IS NOT NULL'));
@@ -456,14 +457,14 @@ async function queryDocuments(
     }
   }
 
-  console.log('[ImageFeed:queryDocuments] Step 2: Processing special filters (hidden/followed/username)...');
+  logger.imageFeed('[ImageFeed:queryDocuments] Step 2: Processing special filters (hidden/followed/username)...');
 
   // Handle "hidden" filter - fetch hidden images for current user
   if (hidden) {
-    console.log('[ImageFeed:queryDocuments] Fetching hidden images for user:', currentUserId);
+    logger.imageFeed('[ImageFeed:queryDocuments] Fetching hidden images for user:', currentUserId);
     const dbStart = Date.now();
     if (!currentUserId) {
-      console.log('[ImageFeed:queryDocuments] No currentUserId, returning empty');
+      logger.imageFeed('[ImageFeed:queryDocuments] No currentUserId, returning empty');
       return []; // No auth, can't get hidden images
     }
     const hiddenImages = await ctx.pg.query<HiddenImageData>(`
@@ -472,20 +473,20 @@ async function queryDocuments(
       WHERE "userId" = $1 AND type = 'Hide'
     `, [currentUserId]);
 
-    console.log(`[ImageFeed:queryDocuments] Found ${hiddenImages.length} hidden images in ${Date.now() - dbStart}ms`);
+    logger.imageFeed(`[ImageFeed:queryDocuments] Found ${hiddenImages.length} hidden images in ${Date.now() - dbStart}ms`);
 
     const imageIds = hiddenImages.map((x) => x.imageId);
     if (imageIds.length) {
       filters.push(makeFilter('id', `IN [${imageIds.join(',')}]`));
     } else {
-      console.log('[ImageFeed:queryDocuments] No hidden images found, returning empty');
+      logger.imageFeed('[ImageFeed:queryDocuments] No hidden images found, returning empty');
       return []; // No hidden images
     }
   }
 
   // Handle "followed" filter - fetch followed users
   if (followed && currentUserId) {
-    console.log('[ImageFeed:queryDocuments] Fetching followed users for user:', currentUserId);
+    logger.imageFeed('[ImageFeed:queryDocuments] Fetching followed users for user:', currentUserId);
     const dbStart = Date.now();
     const followedUsers = await ctx.pg.query<FollowedUserData>(`
       SELECT "targetUserId"
@@ -493,34 +494,34 @@ async function queryDocuments(
       WHERE "userId" = $1 AND type = 'Follow'
     `, [currentUserId]);
 
-    console.log(`[ImageFeed:queryDocuments] Found ${followedUsers.length} followed users in ${Date.now() - dbStart}ms`);
+    logger.imageFeed(`[ImageFeed:queryDocuments] Found ${followedUsers.length} followed users in ${Date.now() - dbStart}ms`);
 
     const userIds = followedUsers.map((x) => x.targetUserId);
     if (userIds.length) {
       filters.push(makeFilter('userId', `IN [${userIds.join(',')}]`));
     } else {
-      console.log('[ImageFeed:queryDocuments] No followed users found, returning empty');
+      logger.imageFeed('[ImageFeed:queryDocuments] No followed users found, returning empty');
       return []; // No followed users
     }
   }
 
   // Username to userId conversion
   if (username && !userId) {
-    console.log('[ImageFeed:queryDocuments] Converting username to userId:', username);
+    logger.imageFeed('[ImageFeed:queryDocuments] Converting username to userId:', username);
     const dbStart = Date.now();
     const users = await ctx.pg.query<UserIdData>(`
       SELECT id FROM "User" WHERE username = $1
     `, [username]);
-    console.log(`[ImageFeed:queryDocuments] Username lookup took ${Date.now() - dbStart}ms`);
+    logger.imageFeed(`[ImageFeed:queryDocuments] Username lookup took ${Date.now() - dbStart}ms`);
     if (users.length === 0) {
-      console.log('[ImageFeed:queryDocuments] User not found, returning empty');
+      logger.imageFeed('[ImageFeed:queryDocuments] User not found, returning empty');
       return []; // User not found
     }
     userId = users[0].id;
-    console.log('[ImageFeed:queryDocuments] Resolved userId:', userId);
+    logger.imageFeed('[ImageFeed:queryDocuments] Resolved userId:', userId);
   }
 
-  console.log('[ImageFeed:queryDocuments] Step 3: NSFW filtering...', { browsingLevel, useCombinedNsfwLevel });
+  logger.imageFeed('[ImageFeed:queryDocuments] Step 3: NSFW filtering...', { browsingLevel, useCombinedNsfwLevel });
 
   // NSFW Level Filtering
   if (!browsingLevel) browsingLevel = 1; // NsfwLevel.PG
@@ -529,7 +530,7 @@ async function queryDocuments(
   const browsingLevels = browsingLevelToArray(browsingLevel);
   const includesNsfw = includesNsfwContent(browsingLevel);
 
-  console.log('[ImageFeed:queryDocuments] NSFW levels:', { browsingLevels, includesNsfw });
+  logger.imageFeed('[ImageFeed:queryDocuments] NSFW levels:', { browsingLevels, includesNsfw });
 
   // Allow moderators to see unscanned content (nsfwLevel = 0)
   if (isModerator && includesNsfw) {
@@ -545,7 +546,7 @@ async function queryDocuments(
   }
 
   filters.push(`(${nsfwFilters.join(' OR ')})`);
-  console.log('[ImageFeed:queryDocuments] NSFW filter added');
+  logger.imageFeed('[ImageFeed:queryDocuments] NSFW filter added');
 
   // NSFW License Restrictions Filter
   // Filter out images with R/X/XXX NSFW levels that use restricted base models
@@ -556,10 +557,10 @@ async function queryDocuments(
     filters.push(
       `NOT (${nsfwLevelField} IN [${NSFW_RESTRICTED_LEVELS.join(',')}] AND baseModel IN [${restrictedBaseModelsQuoted.join(',')}])`
     );
-    console.log('[ImageFeed:queryDocuments] NSFW restricted base models filter added');
+    logger.imageFeed('[ImageFeed:queryDocuments] NSFW restricted base models filter added');
   }
 
-  console.log('[ImageFeed:queryDocuments] Step 4: Content filters (model versions, remixes, tags, etc.)...');
+  logger.imageFeed('[ImageFeed:queryDocuments] Step 4: Content filters (model versions, remixes, tags, etc.)...');
 
   // Model Version Filtering
   if (modelVersionId) {
@@ -609,11 +610,11 @@ async function queryDocuments(
     if (notPublished) {
       const filter = makeFilter('publishedAtUnix', 'NOT EXISTS');
       filters.push(filter);
-      console.log('[ImageFeed:queryDocuments] NOT PUBLISHED filter:', filter);
+      logger.imageFeed('[ImageFeed:queryDocuments] NOT PUBLISHED filter:', filter);
     } else if (scheduled) {
       const filter = makeFilter('publishedAtUnix', `> ${currentTime}`);
       filters.push(filter);
-      console.log('[ImageFeed:queryDocuments] SCHEDULED filter:', filter, 'currentTime:', currentTime, new Date(currentTime).toISOString());
+      logger.imageFeed('[ImageFeed:queryDocuments] SCHEDULED filter:', filter, 'currentTime:', currentTime, new Date(currentTime).toISOString());
     } else {
       const publishedFilters = [makeFilter('publishedAtUnix', `<= ${currentTime}`)];
       if (currentUserId) {
@@ -621,13 +622,13 @@ async function queryDocuments(
       }
       const filter = `(${publishedFilters.join(' OR ')})`;
       filters.push(filter);
-      console.log('[ImageFeed:queryDocuments] DEFAULT PUBLISHED filter:', filter);
+      logger.imageFeed('[ImageFeed:queryDocuments] DEFAULT PUBLISHED filter:', filter);
     }
   } else if (!userId) {
     // General feed - apply published filter for caching
     const filter = makeFilter('publishedAtUnix', `<= ${snappedNow}`);
     filters.push(filter);
-    console.log('[ImageFeed:queryDocuments] GENERAL PUBLISHED filter:', filter, 'snappedNow:', snappedNow);
+    logger.imageFeed('[ImageFeed:queryDocuments] GENERAL PUBLISHED filter:', filter, 'snappedNow:', snappedNow);
   }
 
   // Type Filtering
@@ -675,7 +676,7 @@ async function queryDocuments(
     filters.push(makeFilter('sortAtUnix', `> ${snapToInterval(afterDate)}`));
   }
 
-  console.log('[ImageFeed:queryDocuments] Step 5: Building sort order...', { sort });
+  logger.imageFeed('[ImageFeed:queryDocuments] Step 5: Building sort order...', { sort });
 
   // Sort Order
   let searchSort: string;
@@ -696,11 +697,11 @@ async function queryDocuments(
 
   // Execute search with offset-based pagination from context
   const { limit, offset = 0 } = ctx.pagination;
-  console.log('[ImageFeed:queryDocuments] Using offset-based pagination:', { limit, offset });
+  logger.imageFeed('[ImageFeed:queryDocuments] Using offset-based pagination:', { limit, offset });
 
   const finalFilter = filters.length ? filters.join(' AND ') : undefined;
 
-  console.log('[ImageFeed:queryDocuments] Final search params:', {
+  logger.imageFeed('[ImageFeed:queryDocuments] Final search params:', {
     filterCount: filters.length,
     filter: finalFilter,
     sorts,
@@ -708,7 +709,7 @@ async function queryDocuments(
   });
 
   if (finalFilter) {
-    console.log('[ImageFeed:queryDocuments] Filter details:', finalFilter.substring(0, 500) + (finalFilter.length > 500 ? '...' : ''));
+    logger.imageFeed('[ImageFeed:queryDocuments] Filter details:', finalFilter.substring(0, 500) + (finalFilter.length > 500 ? '...' : ''));
   }
 
   const searchStart = Date.now();
@@ -719,19 +720,19 @@ async function queryDocuments(
     offset, // Use offset from pagination context
   });
 
-  console.log(`[ImageFeed:queryDocuments] Meilisearch query completed in ${Date.now() - searchStart}ms, returned ${result.hits.length} hits`);
-  console.log(`[ImageFeed:queryDocuments] Total query time: ${Date.now() - queryStart}ms`);
+  logger.imageFeed(`[ImageFeed:queryDocuments] Meilisearch query completed in ${Date.now() - searchStart}ms, returned ${result.hits.length} hits`);
+  logger.imageFeed(`[ImageFeed:queryDocuments] Total query time: ${Date.now() - queryStart}ms`);
 
   // Log first and last hit for debugging pagination
   if (result.hits.length > 0) {
     const firstHit = result.hits[0];
     const lastHit = result.hits[result.hits.length - 1];
-    console.log('[ImageFeed:queryDocuments] First hit:', { id: firstHit.id, sortAtUnix: firstHit.sortAtUnix });
-    console.log('[ImageFeed:queryDocuments] Last hit:', { id: lastHit.id, sortAtUnix: lastHit.sortAtUnix });
+    logger.imageFeed('[ImageFeed:queryDocuments] First hit:', { id: firstHit.id, sortAtUnix: firstHit.sortAtUnix });
+    logger.imageFeed('[ImageFeed:queryDocuments] Last hit:', { id: lastHit.id, sortAtUnix: lastHit.sortAtUnix });
 
     if (result.hits.length > limit) {
       const willReturnLast = result.hits[limit - 1];
-      console.log('[ImageFeed:queryDocuments] Last item to be returned (before cursor):', {
+      logger.imageFeed('[ImageFeed:queryDocuments] Last item to be returned (before cursor):', {
         id: willReturnLast.id,
         sortAtUnix: willReturnLast.sortAtUnix,
         nextCursor: `${willReturnLast.sortAtUnix}:${willReturnLast.id}`
@@ -922,7 +923,7 @@ async function populateDocuments(
   documents: ImageDocument[],
   input: ImageQueryInput
 ): Promise<PopulatedImage[]> {
-  console.log('[ImageFeed:populateDocuments] Starting with', documents.length, 'documents');
+  logger.imageFeed('[ImageFeed:populateDocuments] Starting with', documents.length, 'documents');
 
   if (documents.length === 0) return [];
 
@@ -930,7 +931,7 @@ async function populateDocuments(
   const snappedNow = snapToInterval(Date.now());
 
   // Step 1: Apply post-filtering (matches getImagesFromSearchPostFilter logic)
-  console.log('[ImageFeed:populateDocuments] Applying post-filtering...');
+  logger.imageFeed('[ImageFeed:populateDocuments] Applying post-filtering...');
   const filteredDocs = documents.filter((doc) => {
     // Check for valid data
     if (!doc.url) return false;
@@ -959,24 +960,24 @@ async function populateDocuments(
     return isOwnContent || (isModerator && includesNsfwContent(input.browsingLevel || 1));
   });
 
-  console.log('[ImageFeed:populateDocuments] After filtering:', filteredDocs.length, 'documents remain');
+  logger.imageFeed('[ImageFeed:populateDocuments] After filtering:', filteredDocs.length, 'documents remain');
 
   if (filteredDocs.length === 0) return [];
 
   // Step 2: Existence checking (feature-flagged)
   let existenceFilteredDocs = filteredDocs;
 
-  console.log('[ImageFeed:populateDocuments] Existence checking available');
+  logger.imageFeed('[ImageFeed:populateDocuments] Existence checking available');
 
   // Check if existence checking is enabled (passed from caller)
   const cacheExistenceEnabled = input.enableExistenceCheck ?? false;
-  console.log('[ImageFeed:populateDocuments] Cache existence enabled:', cacheExistenceEnabled);
+  logger.imageFeed('[ImageFeed:populateDocuments] Cache existence enabled:', cacheExistenceEnabled);
 
   const imageIdsForExistence = filteredDocs.map((d) => d.id);
 
   if (!cacheExistenceEnabled) {
     // BASIC DB CHECK (default)
-    console.log('[ImageFeed:populateDocuments] Using basic DB check');
+    logger.imageFeed('[ImageFeed:populateDocuments] Using basic DB check');
     const dbIdResp = await ctx.pg.query<{ id: number }>(`
       SELECT id FROM "Image" WHERE id = ANY($1)
     `, [imageIdsForExistence]);
@@ -984,11 +985,10 @@ async function populateDocuments(
     const idSet = new Set(dbIdResp.map((r) => r.id));
     existenceFilteredDocs = filteredDocs.filter((d) => idSet.has(d.id));
 
-    console.log('[ImageFeed:populateDocuments] Basic DB check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
+    logger.imageFeed('[ImageFeed:populateDocuments] Basic DB check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
   } else {
     // SMART CACHE EXISTENCE CHECK (feature-flagged)
-    console.log('[ImageFeed:populateDocuments] Using smart cache check');
-    console.log(ctx.cache);
+    logger.imageFeed('[ImageFeed:populateDocuments] Using smart cache check');
     const uniqueIds = [...new Set(imageIdsForExistence)];
     const cachePrefix = `${FEED_REDIS_KEYS.CACHES.IMAGE_EXISTS}:`;
     const cacheKeys = uniqueIds.map((id) => `${cachePrefix}${id}`);
@@ -1013,7 +1013,7 @@ async function populateDocuments(
       }
     }
 
-    console.log('[ImageFeed:populateDocuments] Cache stats: cached=', uniqueIds.length - uncachedIds.length, 'uncached=', uncachedIds.length);
+    logger.imageFeed('[ImageFeed:populateDocuments] Cache stats: cached=', uniqueIds.length - uncachedIds.length, 'uncached=', uncachedIds.length);
 
     // Query DB for uncached IDs
     if (uncachedIds.length > 0) {
@@ -1044,7 +1044,7 @@ async function populateDocuments(
       return exists !== false; // treat undefined as exists=true
     });
 
-    console.log('[ImageFeed:populateDocuments] Smart cache check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
+    logger.imageFeed('[ImageFeed:populateDocuments] Smart cache check: dropped', filteredDocs.length - existenceFilteredDocs.length, 'images');
   }
 
   if (existenceFilteredDocs.length === 0) return [];
@@ -1054,17 +1054,17 @@ async function populateDocuments(
   const videoIds = existenceFilteredDocs.filter((d) => d.type === 'video').map((d) => d.id);
   const userIds = [...new Set(existenceFilteredDocs.map((d) => d.userId))];
 
-  console.log('[ImageFeed:populateDocuments] Fetching data for', imageIds.length, 'images,', videoIds.length, 'videos,', userIds.length, 'users');
+  logger.imageFeed('[ImageFeed:populateDocuments] Fetching data for', imageIds.length, 'images,', videoIds.length, 'videos,', userIds.length, 'users');
 
   // Step 4: Fetch user reactions (if authenticated)
   let userReactions: Record<number, string[]> = {};
   if (currentUserId) {
-    console.log('[ImageFeed:populateDocuments] Fetching user reactions...');
+    logger.imageFeed('[ImageFeed:populateDocuments] Fetching user reactions...');
     userReactions = await fetchUserReactions(ctx, imageIds, currentUserId);
   }
 
   // Step 5: Fetch all required data in parallel
-  console.log('[ImageFeed:populateDocuments] Fetching all data in parallel...');
+  logger.imageFeed('[ImageFeed:populateDocuments] Fetching all data in parallel...');
   const includeTags = include.includes('tags');
   const includeTagIds = include.includes('tagIds');
   const shouldFetchTags = includeTags || includeTagIds;
@@ -1130,7 +1130,7 @@ async function populateDocuments(
     ? await ctx.cache.fetch('cosmeticData', cosmeticIds)
     : {};
 
-  console.log('[ImageFeed:populateDocuments] Building populated images...');
+  logger.imageFeed('[ImageFeed:populateDocuments] Building populated images...');
 
   // Step 6: Transform to output format (matches getAllImagesIndex)
   const populated: PopulatedImage[] = existenceFilteredDocs.map((doc) => {
@@ -1258,7 +1258,7 @@ async function populateDocuments(
     };
   });
 
-  console.log('[ImageFeed:populateDocuments] Completed, returning', populated.length, 'populated images');
+  logger.imageFeed('[ImageFeed:populateDocuments] Completed, returning', populated.length, 'populated images');
   return populated;
 }
 
