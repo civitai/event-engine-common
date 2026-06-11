@@ -88,7 +88,9 @@ export const imageTagIds = createCache<ImageTagIds>({
     // Return as array
     return Object.values(grouped);
   },
-  ttl: 60 * 60 * 24, // 24 hours
+  ttl: 60 * 60 * 12, // 12h (effective 24h via SWR EX=ttl*2). Cut from 24h
+  // to relieve next-redis-cluster memory pressure — image:tagIds is the
+  // largest bucket there (~22.7M keys / ~13GB). civitai infra 2026-06-10.
 });
 
 /**
