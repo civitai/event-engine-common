@@ -6,9 +6,19 @@ import { cacheKeys } from '../utils/cache-keys';
 import { logger } from '../utils/logger';
 
 const FETCH_BATCH_SIZE = 1000;
-const CACHE_TTL = 24 * 60 * 60; // 24 hours
+// 1 hour. The `metrics:*` hash is populated once from the (deduped) ClickHouse
+// aggregate, then incremented live by the watcher via non-idempotent HINCRBY.
+// That live path can drift from CH (at-least-once redelivery, excluded-user
+// filtering applied in the MV but not on the increment, and, historically, a
+// second watcher double-writing). A short TTL caps how long any such drift can
+// persist: the key self-heals on the next repopulation from CH. See the drift
+// audit (2026-06-16) and docs/plans/entity-metrics-cutover.md.
+const CACHE_TTL = 60 * 60; // 1 hour
 const MISS_CACHE_TTL = 5 * 60; // 5 minutes
-const CACHE_SLIDE_CHANCE = 0.1; // 10% chance of sliding the TTL on each access
+// No TTL sliding. Sliding refreshed the 24h window on hot keys, letting a
+// drifted value dodge repopulation indefinitely (the busier the image, the
+// staler it stayed). Bounding hard at 1h is the whole point of the cut above.
+const CACHE_SLIDE_CHANCE = 0; // disabled (was 0.1)
 const LOCK_DURATION = 2; // 2 seconds lock
 const LOCK_RETRY_DELAY = 200; // 100ms delay between retries
 const LOCK_MAX_RETRIES = 10; // Maximum number of retry attempts
