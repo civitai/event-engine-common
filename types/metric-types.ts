@@ -43,13 +43,14 @@ export type CollectionMetrics = {
 }
 
 export type ImageMetrics = {
-  ReactionLike: number
-  ReactionHeart: number
-  ReactionCry: number
-  ReactionLaugh: number
-  Comment: number
+  Like: number
+  Heart: number
+  Cry: number
+  Laugh: number
+  commentCount: number
   Collection: number
-  Buzz: number
+  tippedAmount: number
+  tippedCount: number
 }
 
 export type ModelMetrics = {
@@ -124,7 +125,7 @@ export const ENTITY_METRIC_TYPES = {
   Bounty: ['benefactorCount', 'commentCount', 'entryCount', 'favoriteCount', 'trackCount', 'unitAmount'],
   BountyEntry: ['Cry', 'Dislike', 'Heart', 'Laugh', 'Like', 'unitAmount'],
   Collection: ['contributorCount', 'followerCount', 'itemCount'],
-  Image: ['ReactionLike', 'ReactionHeart', 'ReactionCry', 'ReactionLaugh', 'Comment', 'Collection', 'Buzz'],
+  Image: ['Cry', 'Heart', 'Laugh', 'Like', 'Collection', 'commentCount', 'tippedAmount', 'tippedCount'],
   Model: ['collectedCount', 'commentCount', 'downloadCount', 'earnedAmount', 'generationCount', 'imageCount', 'ratingCount', 'thumbsDownCount', 'thumbsUpCount', 'tippedAmount', 'tippedCount'],
   ModelVersion: ['downloadCount', 'earnedAmount', 'generationCount', 'imageCount', 'ratingCount', 'thumbsDownCount', 'thumbsUpCount'],
   Post: ['Cry', 'Dislike', 'Heart', 'Laugh', 'Like', 'collectedCount', 'commentCount', 'reactionCount', 'tippedAmount', 'tippedCount'],

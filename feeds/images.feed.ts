@@ -146,11 +146,11 @@ async function createDocuments(
       return {
         id,
         reactionCount:
-          (metrics?.ReactionHeart ?? 0) +
-          (metrics?.ReactionLike ?? 0) +
-          (metrics?.ReactionLaugh ?? 0) +
-          (metrics?.ReactionCry ?? 0),
-        commentCount: metrics?.Comment ?? 0,
+          (metrics?.Heart ?? 0) +
+          (metrics?.Like ?? 0) +
+          (metrics?.Laugh ?? 0) +
+          (metrics?.Cry ?? 0),
+        commentCount: metrics?.commentCount ?? 0,
         collectedCount: metrics?.Collection ?? 0,
       } as ImageDocument;
     });
@@ -274,10 +274,10 @@ async function createDocuments(
 
       const metrics = metricsData[imageRecord.id];
       const reactionCount =
-        (metrics?.ReactionHeart ?? 0) +
-        (metrics?.ReactionLike ?? 0) +
-        (metrics?.ReactionLaugh ?? 0) +
-        (metrics?.ReactionCry ?? 0);
+        (metrics?.Heart ?? 0) +
+        (metrics?.Like ?? 0) +
+        (metrics?.Laugh ?? 0) +
+        (metrics?.Cry ?? 0);
 
       const flags: ImageFlags = removeEmpty({ promptNsfw });
 
@@ -338,7 +338,7 @@ async function createDocuments(
 
         // Metrics
         reactionCount,
-        commentCount: metrics?.Comment ?? 0,
+        commentCount: metrics?.commentCount ?? 0,
         collectedCount: metrics?.Collection ?? 0,
       };
     });
@@ -1137,14 +1137,14 @@ async function populateDocuments(
     // Metrics and stats
     const metrics = metricsData[doc.id];
     const stats: ImageStats = {
-      likeCountAllTime: metrics?.ReactionLike ?? 0,
-      heartCountAllTime: metrics?.ReactionHeart ?? 0,
-      laughCountAllTime: metrics?.ReactionLaugh ?? 0,
-      cryCountAllTime: metrics?.ReactionCry ?? 0,
+      likeCountAllTime: metrics?.Like ?? 0,
+      heartCountAllTime: metrics?.Heart ?? 0,
+      laughCountAllTime: metrics?.Laugh ?? 0,
+      cryCountAllTime: metrics?.Cry ?? 0,
       dislikeCountAllTime: 0,
-      commentCountAllTime: metrics?.Comment ?? 0,
+      commentCountAllTime: metrics?.commentCount ?? 0,
       collectedCountAllTime: metrics?.Collection ?? 0,
-      tippedAmountCountAllTime: metrics?.Buzz ?? 0,
+      tippedAmountCountAllTime: metrics?.tippedAmount ?? 0,
       viewCountAllTime: 0,
     };
 
