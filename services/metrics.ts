@@ -294,10 +294,21 @@ export class MetricService {
             entityId,
             metricType,
             sum(total) AS value
-          FROM entityMetricDailyAgg_new
-          WHERE entityType = '${entityType}'
-            AND entityId IN (${batch})
-            AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
+          FROM (
+            -- entityMetricDailyAgg_new is a ReplacingMergeTree(refreshedAt): the
+            -- daily-agg MV re-inserts each (entity, metric, day) row with a new
+            -- refreshedAt, and old versions linger until a background merge.
+            -- Dedup to the latest version per (entity, metric, day) with argMax
+            -- BEFORE summing across days; a plain sum(total) would add the stale
+            -- un-merged versions and over-count (up to ~2x). argMax avoids the
+            -- cost of FINAL — same pattern the metrics-images search index uses.
+            SELECT entityId, metricType, day, argMax(total, refreshedAt) AS total
+            FROM entityMetricDailyAgg_new
+            WHERE entityType = '${entityType}'
+              AND entityId IN (${batch})
+              AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
+            GROUP BY entityId, metricType, day
+          )
           GROUP BY entityId, metricType
           HAVING value > 0;
         `;
@@ -359,10 +370,17 @@ export class MetricService {
             sumIf(total, day >= subtractMonths(today(), 1)) AS Month,
             sumIf(total, day >= subtractYears(today(), 1))  AS Year,
             sum(total) AS AllTime
-          FROM entityMetricDailyAgg_new
-          WHERE entityType = '${entityType}'
-            AND entityId IN (${batch})
-            AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
+          FROM (
+            -- Dedup the ReplacingMergeTree versions per (entity, metric, day)
+            -- with argMax(refreshedAt) before the timeframe sums, otherwise the
+            -- un-merged versions inflate every window (see fetchFromClickhouse).
+            SELECT entityId, metricType, day, argMax(total, refreshedAt) AS total
+            FROM entityMetricDailyAgg_new
+            WHERE entityType = '${entityType}'
+              AND entityId IN (${batch})
+              AND metricType IN (${ENTITY_METRIC_TYPES[entityType].map((mt) => `'${mt}'`).join(',')})
+            GROUP BY entityId, metricType, day
+          )
           GROUP BY entityId, metricType
         `;
         const batchTime = Date.now() - batchStartTime;
