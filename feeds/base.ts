@@ -104,6 +104,7 @@ export function createFeed<
         },
         cache: {
           fetch: (name, ids) => cacheService.fetch(name, ids),
+          fetchImageTagIds: (ids: number[]) => cacheService.fetchImageTagIds(ids),
           mGet: <T>(keys: string[]) => cacheService.mGet<T>(keys),
           set: <T>(key: string, value: T, options?: { EX?: number }) => cacheService.set<T>(key, value, options),
           sAdd: <T>(key: string, values: T[]) => cacheService.sAdd<T>(key, values),

@@ -230,7 +230,7 @@ async function createDocuments(
     const metricsData = await ctx.metric.fetch(imageIds);
 
     // Step 3: Fetch tags from cache
-    const imageTagIdsData = await ctx.cache.fetch('imageTagIds', imageIds);
+    const imageTagIdsData = await ctx.cache.fetchImageTagIds(imageIds);
 
     // Step 4: Fetch tools and techniques from PostgreSQL
     const tools = await ctx.pg.query<ImageToolData>(`
@@ -1072,7 +1072,7 @@ async function populateDocuments(
   // Fetch data in parallel with proper typing for conditional fetches
   type ProfilePictureData = Awaited<ReturnType<typeof ctx.cache.fetch<'profilePictures'>>>;
   type UserCosmeticData = Awaited<ReturnType<typeof ctx.cache.fetch<'userCosmetics'>>>;
-  type ImageTagIdsData = Awaited<ReturnType<typeof ctx.cache.fetch<'imageTagIds'>>>;
+  type ImageTagIdsData = Awaited<ReturnType<typeof ctx.cache.fetchImageTagIds>>;
   type TagDataType = Awaited<ReturnType<typeof ctx.cache.fetch<'tagData'>>>;
   type CosmeticDataType = Awaited<ReturnType<typeof ctx.cache.fetch<'cosmeticData'>>>;
   type ImageMetaData = Record<number, { meta: unknown }>;
@@ -1106,7 +1106,7 @@ async function populateDocuments(
     fetchVideoMetadata(ctx, videoIds),
     fetchVideoThumbnails(ctx, videoIds),
     shouldFetchTags
-      ? ctx.cache.fetch('imageTagIds', imageIds)
+      ? ctx.cache.fetchImageTagIds(imageIds)
       : (Promise.resolve({}) as Promise<ImageTagIdsData>),
   ]);
 

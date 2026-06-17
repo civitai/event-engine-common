@@ -1,4 +1,6 @@
 import * as caches from '../caches';
+import type { ImageTagIds } from '../caches';
+import { fetchImageTagIdsFromDb } from '../caches/imageData.cache';
 import { CacheContext } from '../caches/base';
 import { IRedisClient, IDbClient, IClickhouseClient, IDataPacker } from '../types/package-stubs';
 import { withRedisPacking } from '../utils/redis-packer';
@@ -11,13 +13,16 @@ import { withRedisPacking } from '../utils/redis-packer';
  */
 export class CacheService {
   private context: CacheContext;
+  private imageTagIdsFetcher?: (ids: number[]) => Promise<Record<number, ImageTagIds>>;
 
   constructor(
     redis: IRedisClient,
     pg: IDbClient,
     ch: IClickhouseClient,
-    packer?: IDataPacker
+    packer?: IDataPacker,
+    imageTagIdsFetcher?: (ids: number[]) => Promise<Record<number, ImageTagIds>>
   ) {
+    this.imageTagIdsFetcher = imageTagIdsFetcher;
     this.context = {
       redis: packer ? withRedisPacking(redis, packer) : redis,
       pg: {
@@ -50,6 +55,23 @@ export class CacheService {
     if (!cache) throw new Error(`Cache named '${name}' could not be found`);
 
     return cache.fetch(this.context, ids) as any;
+  }
+
+  /**
+   * Fetch image tag IDs keyed by imageId.
+   *
+   * Replaces the retired `image:tagIds` Redis hash cache. Uses an injected
+   * fetcher when the consumer supplies one (e.g. civitai backs this with its
+   * already-warm `tagIdsForImagesCache`), otherwise falls back to an uncached
+   * direct DB fetch (used by test/CLI/gated paths). No `image:tagIds` Redis
+   * keys are ever written by this package again.
+   */
+  async fetchImageTagIds(ids: number[]): Promise<Record<number, ImageTagIds>> {
+    if (!ids.length) return {};
+    if (this.imageTagIdsFetcher) return this.imageTagIdsFetcher(ids);
+    // Fallback: uncached direct DB fetch (no redis writes). Used by consumers
+    // that don't inject a cache-backed impl (e.g. test/CLI/gated paths).
+    return fetchImageTagIdsFromDb(this.context, ids);
   }
 
   /**
