@@ -12,86 +12,92 @@ export type ImageTagIds = {
 const ALWAYS_INCLUDE_TAGS = ['anime', 'cartoon', 'comics', 'manga', 'man', 'woman', 'men', 'women'];
 
 /**
- * Cache for image tag IDs
- * Fetches tag IDs associated with images, filtering out disabled tags
+ * Fetch image tag IDs directly from the database (no Redis cache).
+ *
+ * Replaces the retired `image:tagIds` Redis hash cache, which duplicated
+ * civitai's own `tagIdsForImagesCache` and was the largest memory consumer
+ * on next-redis-cluster (~13% of keys / ~1.7 GiB/shard). The only reader is
+ * the v1 images feed (`feeds/images.feed.ts`), which now fetches image→tagIds
+ * through an INJECTED fetcher (consumer-supplied, backed by its own warm
+ * cache) and falls back to this uncached direct DB read when none is injected.
  *
  * Special filtering: When an image has both WD14 and Rekognition tags,
  * Rekognition tags are filtered out EXCEPT for:
  * - Moderation type tags
  * - Tags in ALWAYS_INCLUDE_TAGS (styles and subjects)
+ *
+ * Returns a `Record<number, ImageTagIds>` keyed by imageId (matching the
+ * shape the cache wrapper previously returned to callers).
  */
-export const imageTagIds = createCache<ImageTagIds>({
-  redisKey: 'image:tagIds',
-  idKey: 'imageId',
-  async fetch(ctx: CacheContext, ids: number[]): Promise<ImageTagIds[]> {
-    // Fetch tags on image
-    const imageTags = await ctx.pg.query<{
-      imageId: number;
-      tagId: number;
-      source: string;
-    }>(
-      `SELECT
-        "imageId",
-        "tagId",
-        "source"
-       FROM "TagsOnImageDetails"
-       WHERE "imageId" = ANY($1)
-         AND disabled = false`,
-      [ids]
-    );
+export async function fetchImageTagIdsFromDb(
+  ctx: CacheContext,
+  ids: number[]
+): Promise<Record<number, ImageTagIds>> {
+  if (!ids.length) return {};
 
-    // Fetch tag metadata for filtering
-    const tagIds = [...new Set(imageTags.map(t => t.tagId))];
-    const tags = await ctx.pg.query<{
-      id: number;
-      name: string;
-      type: string;
-    }>(
-      `SELECT id, name, type FROM "Tag" WHERE id = ANY($1)`,
-      [tagIds]
-    );
+  // Fetch tags on image
+  const imageTags = await ctx.pg.query<{
+    imageId: number;
+    tagId: number;
+    source: string;
+  }>(
+    `SELECT
+      "imageId",
+      "tagId",
+      "source"
+     FROM "TagsOnImageDetails"
+     WHERE "imageId" = ANY($1)
+       AND disabled = false`,
+    [ids]
+  );
 
-    const tagMap = new Map(tags.map(t => [t.id, t]));
+  // Fetch tag metadata for filtering
+  const tagIds = [...new Set(imageTags.map(t => t.tagId))];
+  const tags = await ctx.pg.query<{
+    id: number;
+    name: string;
+    type: string;
+  }>(
+    `SELECT id, name, type FROM "Tag" WHERE id = ANY($1)`,
+    [tagIds]
+  );
 
-    // Check which images have WD14 tags
-    const hasWD14: Record<number, boolean> = {};
-    for (const row of imageTags) {
-      hasWD14[row.imageId] ??= false;
-      if (row.source === 'WD14') hasWD14[row.imageId] = true;
+  const tagMap = new Map(tags.map(t => [t.id, t]));
+
+  // Check which images have WD14 tags
+  const hasWD14: Record<number, boolean> = {};
+  for (const row of imageTags) {
+    hasWD14[row.imageId] ??= false;
+    if (row.source === 'WD14') hasWD14[row.imageId] = true;
+  }
+
+  // Group by image and collect tag IDs with filtering
+  const grouped = imageTags.reduce<Record<number, ImageTagIds>>((acc, row) => {
+    const key = row.imageId;
+    if (!acc[key]) {
+      acc[key] = { imageId: row.imageId, tags: [] };
     }
 
-    // Group by image and collect tag IDs with filtering
-    const grouped = imageTags.reduce<Record<number, ImageTagIds>>((acc, row) => {
-      const key = row.imageId;
-      if (!acc[key]) {
-        acc[key] = { imageId: row.imageId, tags: [] };
+    const tag = tagMap.get(row.tagId);
+    if (!tag) return acc;
+
+    // Apply filtering logic: if image has WD14 tags, filter Rekognition tags
+    let canAdd = true;
+    if (row.source === 'Rekognition' && hasWD14[row.imageId]) {
+      // Keep only Moderation tags or tags in ALWAYS_INCLUDE_TAGS
+      if (tag.type !== 'Moderation' && !ALWAYS_INCLUDE_TAGS.includes(tag.name)) {
+        canAdd = false;
       }
+    }
 
-      const tag = tagMap.get(row.tagId);
-      if (!tag) return acc;
+    if (canAdd) {
+      acc[key].tags.push(row.tagId);
+    }
+    return acc;
+  }, {});
 
-      // Apply filtering logic: if image has WD14 tags, filter Rekognition tags
-      let canAdd = true;
-      if (row.source === 'Rekognition' && hasWD14[row.imageId]) {
-        // Keep only Moderation tags or tags in ALWAYS_INCLUDE_TAGS
-        if (tag.type !== 'Moderation' && !ALWAYS_INCLUDE_TAGS.includes(tag.name)) {
-          canAdd = false;
-        }
-      }
-
-      if (canAdd) {
-        acc[key].tags.push(row.tagId);
-      }
-      return acc;
-    }, {});
-
-    // Return as array
-    return Object.values(grouped);
-  },
-  ttl: 60 * 60 * 12, // 12h (effective 24h via SWR EX=ttl*2). Cut from 24h
-  // to relieve next-redis-cluster memory pressure — image:tagIds is the
-  // largest bucket there (~22.7M keys / ~13GB). civitai infra 2026-06-10.
-});
+  return grouped;
+}
 
 /**
  * Tag data

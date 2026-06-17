@@ -19,6 +19,9 @@ export type FeedContext<E extends EntityType> = {
       name: K,
       ids: number[]
     ) => Promise<Awaited<ReturnType<(typeof caches)[K]['fetch']>>>;
+    // Image tag IDs via injected fetcher (or uncached DB fallback) — replaces
+    // the retired `image:tagIds` Redis hash cache.
+    fetchImageTagIds: (ids: number[]) => Promise<Record<number, caches.ImageTagIds>>;
     // Direct Redis operations for feed-specific caching
     mGet: <T>(keys: string[]) => Promise<(T | null)[]>;
     set: <T>(key: string, value: T, options?: { EX?: number }) => Promise<void>;
