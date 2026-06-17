@@ -6,7 +6,12 @@ import { cacheKeys } from '../utils/cache-keys';
 import { logger } from '../utils/logger';
 
 const FETCH_BATCH_SIZE = 1000;
-const CACHE_TTL = 24 * 60 * 60; // 24 hours
+// 12h. Measured live (2026-06-17): the `metrics:<entityType>:<id>` hashes are
+// ~17.5 GiB on next-redis-cluster (~18%, 2nd-largest consumer). Metrics are the
+// source-of-truth-in-ClickHouse repopulated on miss, and hot entries slide their
+// TTL (CACHE_SLIDE_CHANCE) so they stay resident regardless — so lowering the cap
+// from 24h only shortens how long COLD entries linger, ~halving the cold tail.
+const CACHE_TTL = 12 * 60 * 60; // 12 hours
 const MISS_CACHE_TTL = 5 * 60; // 5 minutes
 const CACHE_SLIDE_CHANCE = 0.1; // 10% chance of sliding the TTL on each access
 const LOCK_DURATION = 2; // 2 seconds lock
