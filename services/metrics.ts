@@ -81,23 +81,37 @@ export class MetricService {
   // short backstop TTL (LOCK_DURATION) that only matters if the holder pod dies;
   // while it's alive this re-arms that TTL every LOCK_HEARTBEAT_MS so the lock
   // never lapses mid-query (which would let other pods re-fire duplicate
-  // queries). Returns a function that cancels the heartbeat. Uses a recursive
-  // setTimeout (not setInterval) so a slow Redis round-trip can't overlap beats.
-  private startLockHeartbeat(entityType: EntityType, ids: number[]): () => void {
+  // queries). Uses a recursive setTimeout (not setInterval) so a slow Redis
+  // round-trip can't overlap beats.
+  //
+  // Returns an async stop function. The caller MUST `await` it before releasing
+  // the locks: a beat may already be parked at its `await` when we stop, and if
+  // that EXPIRE landed AFTER the subsequent `del` it would re-create an
+  // ownerless lock (TTL re-armed, no holder) and block waiters for up to
+  // LOCK_DURATION. Awaiting the in-flight beat guarantees the caller's `del`
+  // runs last and wins.
+  private startLockHeartbeat(entityType: EntityType, ids: number[]): () => Promise<void> {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight: Promise<void> | null = null;
 
     const beat = () => {
-      timer = setTimeout(async () => {
+      timer = setTimeout(() => {
         if (stopped) return;
-        try {
-          await this.redis.run(
-            ids.map((id) => this.redis.expire(this.getLockKey(entityType, id), LOCK_DURATION))
-          );
-        } catch (error) {
-          logger.error('MetricService', 'Lock heartbeat failed:', error);
-        }
-        if (!stopped) beat();
+        inFlight = (async () => {
+          try {
+            await this.redis.run(
+              ids.map((id) => this.redis.expire(this.getLockKey(entityType, id), LOCK_DURATION))
+            );
+          } catch (error) {
+            logger.error('MetricService', 'Lock heartbeat failed:', error);
+          } finally {
+            inFlight = null;
+          }
+        })();
+        void inFlight.then(() => {
+          if (!stopped) beat();
+        });
       }, LOCK_HEARTBEAT_MS);
       // Don't let a pending heartbeat keep the process alive on shutdown.
       if (timer && typeof (timer as { unref?: () => void }).unref === 'function') {
@@ -107,9 +121,12 @@ export class MetricService {
 
     beat();
 
-    return () => {
+    return async () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      // Wait out any EXPIRE already in flight so the caller's lock release can't
+      // be raced by a late re-arm.
+      if (inFlight) await inFlight;
     };
   }
 
@@ -309,8 +326,9 @@ export class MetricService {
           // Stop heartbeating and release EVERY lock we acquired, even on error.
           // Previously a thrown CH/cache error skipped the lock-release ops and
           // left the locks dangling until their TTL, blocking all waiters for
-          // those ids for the full duration.
-          stopHeartbeat();
+          // those ids for the full duration. Await the stop so no in-flight
+          // EXPIRE can re-arm a lock after we delete it (ownerless-lock race).
+          await stopHeartbeat();
           try {
             await this.redis.run(
               lockedIds.map((id) => this.redis.del(this.getLockKey(entityType, id)))
@@ -346,9 +364,14 @@ export class MetricService {
           throw error;
         }
 
-        // Collect found results
+        // Collect found results. NOTE: iterate by index — retryResults is built
+        // from `othersLocked.map(...)` so position i aligns with othersLocked[i].
+        // (Previously this used `for (let i of othersLocked)`, iterating ids as
+        // if they were indices, so waiters almost never harvested the holder's
+        // freshly-populated value and fell through to zeros — defeating the
+        // whole point of coalescing onto the lock holder.)
         const found = [];
-        for (let i of othersLocked) {
+        for (let i = 0; i < othersLocked.length; i++) {
           const id = othersLocked[i];
           const cacheResult = retryResults[i];
           if (cacheResult && Object.keys(cacheResult).length > 0) {
