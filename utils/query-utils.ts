@@ -51,6 +51,27 @@ const redisHelpers = (redis: IRedisClient) => {
         return 0
       end
     `,
+    // Idempotent variant of hIncrIfExists. KEYS[2] is a per-event dedupe
+    // marker; ARGV[3] is its TTL (seconds). The increment only runs the first
+    // time a given event is seen, so a Kafka redelivery (rebalance/retry)
+    // re-applying the same delta becomes a no-op — the Redis equivalent of the
+    // ClickHouse ReplacingMergeTree dedup. The marker is set BEFORE the
+    // existence check on KEYS[1], so an event that arrives while the metric key
+    // is cold (not yet populated) still records "seen": if a reader populates
+    // the key from ClickHouse (which already has this event's row) before the
+    // redelivery lands, the redelivery won't double-count it.
+    // KEYS[2] MUST be hash-tagged to KEYS[1]'s slot (e.g. {<KEYS[1]>}:...)
+    // so both keys co-locate on one cluster node.
+    hIncrIfExistsOnce: `
+      if redis.call('SET', KEYS[2], '1', 'NX', 'EX', ARGV[3]) then
+        if redis.call('EXISTS', KEYS[1]) == 1 then
+          return redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+        end
+        return 0
+      else
+        return 0
+      end
+    `,
   };
   const scriptShas: Partial<Record<keyof typeof scripts, string>> = {};
 
@@ -84,6 +105,14 @@ const redisHelpers = (redis: IRedisClient) => {
       },
       async hIncrIfExists(key: string, field: string, incrBy = 1) {
         const result = await executeScript('hIncrIfExists', [key], [field, incrBy.toString()]);
+        return result !== 0;
+      },
+      // Idempotent hIncrIfExists. `dedupeKey` must be hash-tagged to `key`'s
+      // cluster slot. The increment runs once per unique dedupeKey within ttl
+      // seconds; replays are no-ops. Returns false when the increment was
+      // skipped (duplicate or cold key).
+      async hIncrIfExistsOnce(key: string, dedupeKey: string, field: string, incrBy: number, ttl: number) {
+        const result = await executeScript('hIncrIfExistsOnce', [key, dedupeKey], [field, incrBy.toString(), String(ttl)]);
         return result !== 0;
       },
     }
