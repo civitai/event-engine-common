@@ -14,9 +14,21 @@ const FETCH_BATCH_SIZE = 1000;
 const CACHE_TTL = 12 * 60 * 60; // 12 hours
 const MISS_CACHE_TTL = 5 * 60; // 5 minutes
 const CACHE_SLIDE_CHANCE = 0.1; // 10% chance of sliding the TTL on each access
-const LOCK_DURATION = 2; // 2 seconds lock
-const LOCK_RETRY_DELAY = 200; // 100ms delay between retries
-const LOCK_MAX_RETRIES = 10; // Maximum number of retry attempts
+// Stampede-lock TTL. This is the *backstop* expiry if a holder pod dies mid
+// populate; while the holder is alive it heartbeats the lock (see
+// LOCK_HEARTBEAT_MS) so the lock never lapses mid-query. Kept short so a truly
+// dead holder's ids unblock quickly.
+//
+// History: this was 2s with no heartbeat. When ClickHouse degraded and a
+// populate query ran longer than 2s, the lock expired *mid-query*, so the next
+// incoming request for the same ids re-acquired it and fired a DUPLICATE query.
+// Under load this re-fire loop compounded every 2s into a thundering herd that
+// saturated CH's simultaneous-query cap (2026-06 cutover incident). Heartbeating
+// the lock for the real query duration removes that re-fire entirely.
+const LOCK_DURATION = 10; // 10s backstop TTL (heartbeated while holder alive)
+const LOCK_HEARTBEAT_MS = 5000; // re-extend held locks every 5s during a populate
+const LOCK_RETRY_DELAY = 200; // delay between waiter cache-poll retries
+const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving up
 
 // Describes which ClickHouse table the read path pulls per-day totals from,
 // and whether that table still needs the per-(entity,metric,day) argMax dedup.
@@ -62,6 +74,43 @@ export class MetricService {
 
   private getLockKey(entityType: EntityType, id: number): string {
     return cacheKeys.metricLock(entityType, id);
+  }
+
+  // Keep the stampede locks we currently hold alive for the full duration of a
+  // populate by periodically re-extending their TTL. The lock acquire sets a
+  // short backstop TTL (LOCK_DURATION) that only matters if the holder pod dies;
+  // while it's alive this re-arms that TTL every LOCK_HEARTBEAT_MS so the lock
+  // never lapses mid-query (which would let other pods re-fire duplicate
+  // queries). Returns a function that cancels the heartbeat. Uses a recursive
+  // setTimeout (not setInterval) so a slow Redis round-trip can't overlap beats.
+  private startLockHeartbeat(entityType: EntityType, ids: number[]): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const beat = () => {
+      timer = setTimeout(async () => {
+        if (stopped) return;
+        try {
+          await this.redis.run(
+            ids.map((id) => this.redis.expire(this.getLockKey(entityType, id), LOCK_DURATION))
+          );
+        } catch (error) {
+          logger.error('MetricService', 'Lock heartbeat failed:', error);
+        }
+        if (!stopped) beat();
+      }, LOCK_HEARTBEAT_MS);
+      // Don't let a pending heartbeat keep the process alive on shutdown.
+      if (timer && typeof (timer as { unref?: () => void }).unref === 'function') {
+        (timer as { unref: () => void }).unref();
+      }
+    };
+
+    beat();
+
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
   }
 
   // Build the `(entityId, metricType, day, total)` subquery the timeframe/sum
@@ -215,43 +264,61 @@ export class MetricService {
       // Fetch data for IDs we successfully locked
       if (lockedIds.length > 0) {
         logger.metric(`Fetching fresh data from ClickHouse for ${lockedIds.length} locked IDs: [${lockedIds.join(', ')}]`);
-        const freshData = await this.fetchFromClickhouse(entityType, lockedIds);
-        logger.metric(`ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
 
-        // Cache the results and release locks
-        const cacheAndLockOps: Promise<any>[] = [];
+        // Heartbeat the locks we hold so they can't expire while this (possibly
+        // slow) populate runs. Without this, a query slower than LOCK_DURATION
+        // lets the lock lapse mid-flight and other pods re-acquire it and fire
+        // duplicate queries for the same ids -> thundering herd. Always stopped
+        // and the locks always released in the `finally` below.
+        const stopHeartbeat = this.startLockHeartbeat(entityType, lockedIds);
+        try {
+          const freshData = await this.fetchFromClickhouse(entityType, lockedIds);
+          logger.metric(`ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
 
-        for (const id of lockedIds) {
-          if (freshData[id]) {
-            // Cache found metrics with CACHE_TTL
-            const metricsToCache: Record<string, string> = {};
-            for (const [key, value] of Object.entries(freshData[id])) {
-              metricsToCache[key] = value.toString();
+          // Cache the results. Lock release is handled in `finally` so it runs
+          // even if the populate or this cache write throws.
+          const cacheOps: Promise<any>[] = [];
+          for (const id of lockedIds) {
+            if (freshData[id]) {
+              // Cache found metrics with CACHE_TTL
+              const metricsToCache: Record<string, string> = {};
+              for (const [key, value] of Object.entries(freshData[id])) {
+                metricsToCache[key] = value.toString();
+              }
+
+              cacheOps.push(
+                this.redis.hSetEx(this.getCacheKey(entityType, id), metricsToCache, CACHE_TTL)
+              );
+
+              results[id] = freshData[id];
+            } else {
+              // Cache not found with MISS_CACHE_TTL
+              cacheOps.push(
+                this.redis.hSetEx(this.getCacheKey(entityType, id), { notFound: '1' }, MISS_CACHE_TTL)
+              );
             }
-
-            cacheAndLockOps.push(
-              this.redis.hSetEx(this.getCacheKey(entityType, id), metricsToCache, CACHE_TTL)
-            );
-
-            results[id] = freshData[id];
-          } else {
-            // Cache not found with MISS_CACHE_TTL
-            cacheAndLockOps.push(
-              this.redis.hSetEx(this.getCacheKey(entityType, id), { notFound: '1' }, MISS_CACHE_TTL)
-            );
           }
 
-          // Release lock
-          cacheAndLockOps.push(this.redis.del(this.getLockKey(entityType, id)));
-        }
-
-        logger.metric(`Executing ${cacheAndLockOps.length} cache and lock operations`);
-        try {
-          await this.redis.run(cacheAndLockOps);
-          logger.metric('Cache and lock operations completed successfully');
+          logger.metric(`Executing ${cacheOps.length} cache operations`);
+          await this.redis.run(cacheOps);
+          logger.metric('Cache operations completed successfully');
         } catch (error) {
-          logger.error('MetricService', 'Cache and lock operations failed:', error);
+          logger.error('MetricService', 'Populate/cache operations failed:', error);
           throw error;
+        } finally {
+          // Stop heartbeating and release EVERY lock we acquired, even on error.
+          // Previously a thrown CH/cache error skipped the lock-release ops and
+          // left the locks dangling until their TTL, blocking all waiters for
+          // those ids for the full duration.
+          stopHeartbeat();
+          try {
+            await this.redis.run(
+              lockedIds.map((id) => this.redis.del(this.getLockKey(entityType, id)))
+            );
+            logger.metric(`Released ${lockedIds.length} populate locks`);
+          } catch (releaseError) {
+            logger.error('MetricService', 'Lock release failed:', releaseError);
+          }
         }
       }
 
