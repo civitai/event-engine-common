@@ -30,37 +30,21 @@ const LOCK_HEARTBEAT_MS = 5000; // re-extend held locks every 5s during a popula
 const LOCK_RETRY_DELAY = 200; // delay between waiter cache-poll retries
 const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving up
 
-// Describes which ClickHouse table the read path pulls per-day totals from,
-// and whether that table still needs the per-(entity,metric,day) argMax dedup.
-//
-// - `entityMetricDailyAgg_new` is a ReplacingMergeTree(refreshedAt): the agg MV
-//   re-inserts each row with a new refreshedAt and old versions linger until a
-//   background merge, so a read MUST argMax(total, refreshedAt) per day before
-//   summing or it over-counts (up to ~2x). -> needsArgMaxDedup: true.
-// - `entityMetricDailyAgg_v2` is a read VIEW that already returns FINAL per-day
-//   totals directly (no append-churn, always fresh). -> needsArgMaxDedup: false.
-export type AggSource = { table: string; needsArgMaxDedup: boolean };
-
-// Default source preserves byte-identical legacy behavior when no provider is
-// supplied (framework-free callers, tests). The owning app passes a provider
-// that flips `table`/`needsArgMaxDedup` off a feature flag for a reversible
-// cutover; it is resolved fresh on every CH query so the flag stays live even
-// though MetricService is constructed once and reused.
-const DEFAULT_AGG_SOURCE: AggSource = {
-  table: 'entityMetricDailyAgg_new',
-  needsArgMaxDedup: true,
-};
-
-export type AggSourceProvider = () => Promise<AggSource> | AggSource;
+// The read path pulls per-day totals from `entityMetricDailyAgg_v2`, a read
+// VIEW that already returns FINAL per-day totals directly (no append-churn,
+// always fresh), so reads select `total` straight without any argMax dedup.
+// (Historically this was flag-switchable between the ReplacingMergeTree
+// `entityMetricDailyAgg_new` — which needed argMax(total, refreshedAt) per day
+// to avoid ~2x over-counting — and the v2 view; the v2 cutover is now permanent
+// so the source is hardcoded here.)
+const ENTITY_METRIC_AGG_TABLE = 'entityMetricDailyAgg_v2';
 
 export class MetricService {
   private ch: SimpleClickhouse;
   private redis: RedisWithHelpers;
-  private aggSourceProvider: AggSourceProvider;
-  constructor(ch: IClickhouseClient, redis: IRedisClient, aggSourceProvider?: AggSourceProvider) {
+  constructor(ch: IClickhouseClient, redis: IRedisClient) {
     this.ch = new SimpleClickhouse(ch);
     this.redis = withRedisHelpers(redis);
-    this.aggSourceProvider = aggSourceProvider ?? (() => DEFAULT_AGG_SOURCE);
     logger.metric('Initialized with ClickHouse and Redis clients');
     logger.metric('Redis client type:', typeof redis);
     logger.metric('Redis client constructor:', redis.constructor.name);
@@ -131,11 +115,9 @@ export class MetricService {
   }
 
   // Build the `(entityId, metricType, day, total)` subquery the timeframe/sum
-  // aggregations read from. When the source still has append-churn we argMax
-  // per (entity, metric, day); when it's the already-FINAL v2 view we select
-  // total directly (argMax over a single version is a no-op cost we skip).
+  // aggregations read from. The v2 view is already FINAL per day, so we select
+  // total directly (no argMax dedup needed).
   private buildPerDaySource(
-    source: AggSource,
     entityType: EntityType,
     ids: number[],
     metricTypes: readonly string[]
@@ -145,17 +127,9 @@ export class MetricService {
     const where = `WHERE entityType = '${entityType}'
               AND entityId IN (${idList})
               AND metricType IN (${metricList})`;
-    if (source.needsArgMaxDedup) {
-      return `(
-            SELECT entityId, metricType, day, argMax(total, refreshedAt) AS total
-            FROM ${source.table}
-            ${where}
-            GROUP BY entityId, metricType, day
-          )`;
-    }
     return `(
             SELECT entityId, metricType, day, total
-            FROM ${source.table}
+            FROM ${ENTITY_METRIC_AGG_TABLE}
             ${where}
           )`;
   }
@@ -434,11 +408,7 @@ export class MetricService {
       let rawMetrics;
       try {
         logger.clickhouse(`Executing ClickHouse query for batch ${batchIndex + 1}`);
-        // Source table + dedup mode resolved fresh per query so the owning app's
-        // feature flag stays live even though this service is a reused singleton.
-        const source = await this.aggSourceProvider();
         const perDaySource = this.buildPerDaySource(
-          source,
           entityType,
           batch,
           ENTITY_METRIC_TYPES[entityType]
@@ -501,10 +471,7 @@ export class MetricService {
       let rawMetrics;
       try {
         logger.clickhouse(`Executing ClickHouse timeframes query for batch ${batchIndex + 1}`);
-        // See fetchFromClickhouse: source/dedup resolved fresh per query.
-        const source = await this.aggSourceProvider();
         const perDaySource = this.buildPerDaySource(
-          source,
           entityType,
           batch,
           ENTITY_METRIC_TYPES[entityType]
