@@ -955,16 +955,7 @@ async function populateDocuments(
   }
 
   // ========================================================================
-  // Step 4: Get unavailable generation resources from Redis
-  // ========================================================================
-
-  // Fetch unavailable resources from Redis (matches getUnavailableResources)
-  const unavailableResourcesRaw = await ctx.cache.mGet<number[]>(['system:features:generation:unavailable-resources']);
-  const unavailableResources = unavailableResourcesRaw[0] ?? [];
-  const unavailableSet = new Set(unavailableResources);
-
-  // ========================================================================
-  // Step 5: Transform to output format
+  // Step 4: Transform to output format
   // ========================================================================
 
   logger.modelFeed('[ModelFeed:populateDocuments] Building populated models...');
@@ -988,8 +979,13 @@ async function populateDocuments(
       (input.userId || input.username || input.status?.includes('Draft'));
     if (filteredImages.length === 0 && !showImageless) continue;
 
-    // Determine if generation is available
-    const canGenerate = version.covered === true && !unavailableSet.has(version.id);
+    // Determine if generation is available. The GenerationDisabled flag (bit 1,
+    // value 2) is a moderator override on ModelVersion.flags — mirrors
+    // ModelVersionFlag.GenerationDisabled in the main repo. It rides the
+    // modelFullData cache (24h TTL), which the main-repo toggle does not bust, so
+    // a mod toggle can take up to the TTL to reflect here — accepted (this feed
+    // previously ignored the blacklist entirely, so this is already a net gain).
+    const canGenerate = version.covered === true && (version.flags & 2) === 0;
 
     // Build normalized rank (no period suffix)
     const rank: ModelRank = {

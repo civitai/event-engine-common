@@ -105,6 +105,7 @@ export interface ModelFeedVersionDetails {
   publishedAt: Date | null;
   status: string;
   covered: boolean;
+  flags: number;
   availability: string;
   nsfwLevel: number;
 }

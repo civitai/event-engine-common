@@ -85,6 +85,7 @@ export const modelFullData = createCache<ModelFeedCacheData>({
         mv."trainingStatus",
         mv."publishedAt",
         mv."status",
+        mv."flags",
         mv.availability,
         mv."nsfwLevel",
         mv."description",
