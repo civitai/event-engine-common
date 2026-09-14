@@ -20,6 +20,13 @@ export type ModelCacheData = {
 export const modelData = createCache<ModelCacheData>({
   redisKey: 'model:data',
   idKey: 'modelId',
+  fieldTypes: {
+    modelId: 'number',
+    name: 'string',
+    type: 'string',
+    nsfw: 'boolean',
+    userId: 'number',
+  },
   async fetch({ pg }: CacheContext, ids: number[]) {
     const models = await pg.query<ModelCacheData>(
       `SELECT
@@ -70,6 +77,7 @@ type TagQueryResult = {
 export const modelFullData = createCache<ModelFeedCacheData>({
   redisKey: 'model:full-data',
   idKey: 'modelId',
+  fieldTypes: { modelId: 'number', versions: 'json', hashes: 'json', tags: 'json' },
   async fetch({ pg }: CacheContext, ids: number[]) {
     // Fetch versions
     const versions = await pg.query<VersionQueryResult>(
@@ -181,6 +189,7 @@ export type ModelTagIdsData = {
 export const modelTagIds = createCache<ModelTagIdsData>({
   redisKey: 'model:tag-ids',
   idKey: 'modelId',
+  fieldTypes: { modelId: 'number', tags: 'json' },
   async fetch({ pg }: CacheContext, ids: number[]) {
     const tags = await pg.query<{ modelId: number; tagId: number }>(
       `SELECT "modelId", "tagId"
