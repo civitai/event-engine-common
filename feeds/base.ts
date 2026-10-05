@@ -66,21 +66,14 @@ export function createFeed<
         host: config.connection?.host ?? process.env.FEED_HOST ?? 'http://localhost:7700',
       });
 
-      // Read-only initialization: just get the index reference
+      // Read-only initialization: build the index handle locally. `client.index()` issues no
+      // request; `getIndex()` fetched index metadata that nothing on the read path uses, which
+      // cost one extra round trip per Feed — and callers construct a Feed per request. A missing
+      // index now surfaces as `index_not_found` from the first search rather than from ready().
+      // The write path (configure) still calls getIndex, because it needs to create on miss.
       logger.debug('Feed',`[Feed:${config.name}] Initializing feed (read-only)...`);
-      const initStart = Date.now();
-
-      this.indexReady = this.client.getIndex(config.name)
-        .then((index) => {
-          this.index = index;
-          logger.debug('Feed',`[Feed:${config.name}] Index obtained in ${Date.now() - initStart}ms`);
-          return true;
-        })
-        .catch((err) => {
-          this.indexError = err as Error;
-          console.error(`[Feed:${config.name}] Failed to get index:`, err);
-          return false;
-        });
+      this.index = this.client.index(config.name);
+      this.indexReady = Promise.resolve(true);
 
       // Build context
       const self = this;

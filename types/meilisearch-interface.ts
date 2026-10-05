@@ -202,6 +202,11 @@ export interface IMeilisearch {
   getIndex(indexName: string): Promise<IMeilisearchIndex>;
 
   /**
+   * Get a local handle to an index without a network request (no existence check)
+   */
+  index(indexName: string): IMeilisearchIndex;
+
+  /**
    * Create a new index
    */
   createIndex(indexName: string, options?: { primaryKey?: string }): Promise<MeilisearchTask>;
