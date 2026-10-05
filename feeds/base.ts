@@ -49,9 +49,7 @@ export function createFeed<
   class Feed {
     public client: IMeilisearch;
     public context!: FeedContext<E>;
-    public index: IMeilisearchIndex | undefined;
-    public indexError: Error | undefined;
-    public indexReady: Promise<boolean>;
+    public index: IMeilisearchIndex;
     public configured = false;
 
     constructor(
@@ -69,11 +67,10 @@ export function createFeed<
       // Read-only initialization: build the index handle locally. `client.index()` issues no
       // request; `getIndex()` fetched index metadata that nothing on the read path uses, which
       // cost one extra round trip per Feed — and callers construct a Feed per request. A missing
-      // index now surfaces as `index_not_found` from the first search rather than from ready().
+      // index surfaces as `index_not_found` from the first search.
       // The write path (configure) still calls getIndex, because it needs to create on miss.
       logger.debug('Feed',`[Feed:${config.name}] Initializing feed (read-only)...`);
       this.index = this.client.index(config.name);
-      this.indexReady = Promise.resolve(true);
 
       // Build context
       const self = this;
@@ -107,8 +104,8 @@ export function createFeed<
             return metricService.fetch(config.entityType, ids);
           },
         },
+        // A getter, not a captured value: configure() reassigns self.index.
         get index() {
-          if (!self.index) throw new Error('Index not ready');
           return self.index;
         },
         // Default pagination - will be overridden in query method
@@ -117,15 +114,6 @@ export function createFeed<
           cursor: undefined,
         },
       } as FeedContext<E>;
-    }
-
-    /**
-     * Wait for index to be ready
-     */
-    public async ready() {
-      if (!(await this.indexReady))
-        throw this.indexError ?? new Error('Index failed to initialize');
-      if (!this.index) throw new Error('Index not available');
     }
 
     /**
@@ -139,9 +127,6 @@ export function createFeed<
 
       logger.debug('Feed',`[Feed:${config.name}] Configuring index for write operations...`);
       const configStart = Date.now();
-
-      // Ensure we can access the index
-      await this.ready();
 
       // Try to create index if it doesn't exist
       try {
@@ -256,8 +241,6 @@ export function createFeed<
       logger.debug('Feed',`[Feed:${config.name}] Query started with input:`, JSON.stringify(input, null, 2));
       const queryStart = Date.now();
 
-      await this.ready();
-
       // Extract pagination from input
       const { limit = 20, cursor, ...customInput } = input;
 
@@ -339,17 +322,10 @@ export function createFeed<
      *
      * @param docs - Documents to populate
      * @param input - Input parameters for filtering/conditional fetching
-     * @param options - Optional settings
-     * @param options.skipIndexCheck - Skip index availability check (for testing without index)
      */
-    async populate(docs: TDoc[], input: TInput, options?: { skipIndexCheck?: boolean }): Promise<TPop[]> {
+    async populate(docs: TDoc[], input: TInput): Promise<TPop[]> {
       logger.debug('Feed',`[Feed:${config.name}] Populate started with ${docs.length} documents`);
       const populateStart = Date.now();
-
-      // In production, ensure index is ready; in dev/test mode, allow bypassing
-      if (!options?.skipIndexCheck) {
-        await this.ready();
-      }
 
       const populatedDocs = await config.populateDocuments(this.context, docs, input);
 
