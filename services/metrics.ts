@@ -14,6 +14,18 @@ const FETCH_BATCH_SIZE = 1000;
 const CACHE_TTL = 12 * 60 * 60; // 12 hours
 const MISS_CACHE_TTL = 5 * 60; // 5 minutes
 const CACHE_SLIDE_CHANCE = 0.1; // 10% chance of sliding the TTL on each access
+// A cached entry is a ClickHouse snapshot plus the watcher's live increments, and
+// nothing re-applies an increment that never landed (the watcher's writes are
+// best-effort, and an event arriving while the key is cold is skipped). Sliding
+// keeps hot entries resident indefinitely, so without a refresh a lost increment
+// would be shown for as long as the entry stays hot. Older entries are still
+// served, then repopulated in the background: a lost increment lasts at most this.
+const REFRESH_AFTER = 60 * 60; // 1 hour
+// Entries written before the stamp existed (or by a populate that doesn't stamp)
+// refresh on this share of reads, so a deploy doesn't repopulate every hot key at once.
+const UNSTAMPED_REFRESH_CHANCE = 0.05;
+// Unix seconds of the populate, stored beside the metric fields in the hash.
+const POPULATED_AT_FIELD = '_populatedAt';
 // Stampede-lock TTL. This is the *backstop* expiry if a holder pod dies mid
 // populate; while the holder is alive it heartbeats the lock (see
 // LOCK_HEARTBEAT_MS) so the lock never lapses mid-query. Kept short so a truly
@@ -188,24 +200,18 @@ export class MetricService {
 
     // Step 2: Process cache results
     const slideTTLKeys: string[] = [];
+    const staleIds: number[] = [];
+    const nowSeconds = Math.floor(Date.now() / 1000);
     for (let i in uniqueIds) {
       const id = uniqueIds[i];
       const cacheResult = cacheResults[i] as Record<string, string> | null;
 
       if (cacheResult && Object.keys(cacheResult).length > 0) {
-        const entries = Object.entries(cacheResult);
-        // Check if this is a "not found" entry
-        if (cacheResult.notFound === '1' && entries.length === 1) {
-          continue; // Skip not found entries
-        }
-
-        // Convert string values back to numbers for metric fields
-        const metrics: any = {};
-        for (const [key, value] of entries) {
-          if (key === 'notFound') continue;
-          metrics[key] = parseInt(value, 10);
-        }
+        const metrics = this.parseCachedMetrics(cacheResult);
+        if (!metrics) continue; // Skip not found entries
         results[id] = metrics as EntityMetricMap[T];
+
+        if (this.isDueForRefresh(cacheResult, nowSeconds)) staleIds.push(id);
 
         // Mark for potential TTL sliding (only for non-notFound entries)
         if (Math.random() < CACHE_SLIDE_CHANCE) {
@@ -215,6 +221,9 @@ export class MetricService {
         cacheMisses.push(id);
       }
     }
+
+    // Served from cache above; the repopulate must not hold up this request.
+    if (staleIds.length > 0) void this.refreshInBackground(entityType, staleIds);
 
     // Step 3: Slide TTLs for hot cache entries
     if (slideTTLKeys.length > 0) {
@@ -263,36 +272,12 @@ export class MetricService {
         // and the locks always released in the `finally` below.
         const stopHeartbeat = this.startLockHeartbeat(entityType, lockedIds);
         try {
-          const freshData = await this.fetchFromClickhouse(entityType, lockedIds);
-          logger.metric(`ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
-
-          // Cache the results. Lock release is handled in `finally` so it runs
-          // even if the populate or this cache write throws.
-          const cacheOps: Promise<any>[] = [];
+          // Lock release is handled in `finally` so it runs even if the populate
+          // or its cache write throws.
+          const freshData = await this.populate(entityType, lockedIds);
           for (const id of lockedIds) {
-            if (freshData[id]) {
-              // Cache found metrics with CACHE_TTL
-              const metricsToCache: Record<string, string> = {};
-              for (const [key, value] of Object.entries(freshData[id])) {
-                metricsToCache[key] = value.toString();
-              }
-
-              cacheOps.push(
-                this.redis.hSetEx(this.getCacheKey(entityType, id), metricsToCache, CACHE_TTL)
-              );
-
-              results[id] = freshData[id];
-            } else {
-              // Cache not found with MISS_CACHE_TTL
-              cacheOps.push(
-                this.redis.hSetEx(this.getCacheKey(entityType, id), { notFound: '1' }, MISS_CACHE_TTL)
-              );
-            }
+            if (freshData[id]) results[id] = freshData[id];
           }
-
-          logger.metric(`Executing ${cacheOps.length} cache operations`);
-          await this.redis.run(cacheOps);
-          logger.metric('Cache operations completed successfully');
         } catch (error) {
           logger.error('MetricService', 'Populate/cache operations failed:', error);
           throw error;
@@ -350,18 +335,8 @@ export class MetricService {
           const cacheResult = retryResults[i];
           if (cacheResult && Object.keys(cacheResult).length > 0) {
             found.push(id);
-            const entries = Object.entries(cacheResult);
-            // Check if this is a "not found" entry
-            if (cacheResult.notFound === '1' && entries.length === 1) {
-              continue; // Skip not found entries
-            }
-
-            // Convert string values back to numbers for metric fields
-            const metrics: any = {};
-            for (const [key, value] of entries) {
-              if (key === 'notFound') continue;
-              metrics[key] = parseInt(value, 10);
-            }
+            const metrics = this.parseCachedMetrics(cacheResult);
+            if (!metrics) continue; // Skip not found entries
             results[id] = metrics as EntityMetricMap[T];
           }
         }
@@ -390,6 +365,89 @@ export class MetricService {
     const totalTime = Date.now() - startTime;
     logger.metric(`fetch() completed in ${totalTime}ms for entityType: ${entityType}, returned ${Object.keys(completeResults).length} results`);
     return completeResults;
+  }
+
+  // Metric fields of a cached hash, or undefined for a not-found marker.
+  private parseCachedMetrics(hash: Record<string, string>): Record<string, number> | undefined {
+    const metrics: Record<string, number> = {};
+    let hasMetric = false;
+    for (const [key, value] of Object.entries(hash)) {
+      if (key === 'notFound' || key === POPULATED_AT_FIELD) continue;
+      metrics[key] = parseInt(value, 10);
+      hasMetric = true;
+    }
+    if (!hasMetric && hash.notFound === '1') return undefined;
+    return metrics;
+  }
+
+  private isDueForRefresh(hash: Record<string, string>, nowSeconds: number): boolean {
+    const populatedAt = Number(hash[POPULATED_AT_FIELD]);
+    if (!populatedAt) return Math.random() < UNSTAMPED_REFRESH_CHANCE;
+    return nowSeconds - populatedAt >= REFRESH_AFTER;
+  }
+
+  // Writes a fresh ClickHouse snapshot for `ids`. Each hash is replaced whole, so
+  // a metric that dropped to zero (and so has no row) doesn't survive from the
+  // previous snapshot.
+  private async populate<T extends EntityType>(
+    entityType: T,
+    ids: number[]
+  ): Promise<Record<number, EntityMetricMap[T]>> {
+    const freshData = await this.fetchFromClickhouse(entityType, ids);
+    logger.metric(`ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
+
+    const populatedAt = String(Math.floor(Date.now() / 1000));
+    const cacheOps = ids.map((id) => {
+      const key = this.getCacheKey(entityType, id);
+      if (!freshData[id]) return this.redis.hReplaceEx(key, { notFound: '1' }, MISS_CACHE_TTL);
+
+      const fields: Record<string, string> = { [POPULATED_AT_FIELD]: populatedAt };
+      for (const [metric, value] of Object.entries(freshData[id])) fields[metric] = String(value);
+      return this.redis.hReplaceEx(key, fields, CACHE_TTL);
+    });
+    await this.redis.run(cacheOps);
+    logger.metric(`Cached ${cacheOps.length} populated entries`);
+    return freshData;
+  }
+
+  // Repopulates entries that were served stale, under the same per-id lock as a
+  // miss, so a hot key read by many pods at once is refreshed by one of them. Ids
+  // locked by another holder are skipped: that holder is already repopulating them.
+  // Never throws, because the caller already has its answer.
+  private async refreshInBackground(entityType: EntityType, ids: number[]): Promise<void> {
+    let lockedIds: number[];
+    try {
+      const gotLock = await this.redis.run(
+        ids.map((id) => this.redis.setNxKeepTtlWithEx(this.getLockKey(entityType, id), '1', LOCK_DURATION))
+      );
+      lockedIds = ids.filter((_, i) => gotLock[i]);
+    } catch (error) {
+      logger.error('MetricService', 'Refresh lock acquisition failed:', error);
+      return;
+    }
+    if (!lockedIds.length) return;
+
+    logger.metric(`Refreshing ${lockedIds.length} stale entries in the background`);
+    const stopHeartbeat = this.startLockHeartbeat(entityType, lockedIds);
+    let refreshed = false;
+    try {
+      await this.populate(entityType, lockedIds);
+      refreshed = true;
+    } catch (error) {
+      logger.error('MetricService', 'Background refresh failed:', error);
+    } finally {
+      await stopHeartbeat();
+      // On failure the locks are left to expire after LOCK_DURATION: released now,
+      // the next read of each stale entry would retry against a ClickHouse that just
+      // failed, once per request.
+      if (refreshed) {
+        try {
+          await this.redis.run(lockedIds.map((id) => this.redis.del(this.getLockKey(entityType, id))));
+        } catch (releaseError) {
+          logger.error('MetricService', 'Lock release failed:', releaseError);
+        }
+      }
+    }
   }
 
   private async fetchFromClickhouse<T extends EntityType>(entityType: T, ids: number[]): Promise<Record<number, EntityMetricMap[T]>> {

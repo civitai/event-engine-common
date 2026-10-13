@@ -93,6 +93,10 @@ const redisHelpers = (redis: IRedisClient) => {
     async hSetEx(key: string, fields: Record<string, string>, ttl: number) {
       return redis.multi().hSet(key, fields).expire(key, ttl).exec();
     },
+    // hSetEx that drops fields the new value doesn't carry.
+    async hReplaceEx(key: string, fields: Record<string, string>, ttl: number) {
+      return redis.multi().del(key).hSet(key, fields).expire(key, ttl).exec();
+    },
     async run<T>(ops: Promise<T>[]) {
       return Promise.all(ops);
     },
