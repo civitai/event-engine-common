@@ -2,7 +2,7 @@ import { RedisWithHelpers, SimpleClickhouse, withRedisHelpers } from '../utils/q
 import { EntityType, EntityMetricMap, ENTITY_METRIC_TYPES } from '../types/metric-types';
 import { IClickhouseClient, IRedisClient } from '../types/package-stubs';
 import { chunk, sleep } from '../utils/basic';
-import { cacheKeys } from '../utils/cache-keys';
+import { cacheKeys, METRIC_RECENT_EVENT_TTL } from '../utils/cache-keys';
 import { logger } from '../utils/logger';
 
 const FETCH_BATCH_SIZE = 1000;
@@ -19,7 +19,8 @@ const CACHE_SLIDE_CHANCE = 0.1; // 10% chance of sliding the TTL on each access
 // best-effort, and an event arriving while the key is cold is skipped). Sliding
 // keeps hot entries resident indefinitely, so without a refresh a lost increment
 // would be shown for as long as the entry stays hot. Older entries are still
-// served, then repopulated in the background: a lost increment lasts at most this.
+// served, then repopulated in the background: a lost increment lasts at most this,
+// or about METRIC_RECENT_EVENT_TTL when the populate ran within that long of the event.
 const REFRESH_AFTER = 60 * 60; // 1 hour
 // Entries written before the stamp existed (or by a populate that doesn't stamp)
 // refresh on this share of reads, so a deploy doesn't repopulate every hot key at once.
@@ -388,7 +389,11 @@ export class MetricService {
 
   // Writes a fresh ClickHouse snapshot for `ids`. Each hash is replaced whole, so
   // a metric that dropped to zero (and so has no row) doesn't survive from the
-  // previous snapshot.
+  // previous snapshot. ClickHouse totals trail events by minutes, so a snapshot taken
+  // soon after an event can lack it while the increment it would have replaced was
+  // skipped (cold key) or wiped by this replace. Such an entry is stamped as already
+  // aged to METRIC_RECENT_EVENT_TTL short of REFRESH_AFTER, so it refreshes once the
+  // event has reached ClickHouse.
   private async populate<T extends EntityType>(
     entityType: T,
     ids: number[]
@@ -396,14 +401,19 @@ export class MetricService {
     const freshData = await this.fetchFromClickhouse(entityType, ids);
     logger.metric(`ClickHouse fetch completed, got data for ${Object.keys(freshData).length} entities`);
 
-    const populatedAt = String(Math.floor(Date.now() / 1000));
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const stamp = {
+      field: POPULATED_AT_FIELD,
+      value: String(nowSeconds),
+      ifMarker: String(nowSeconds - REFRESH_AFTER + METRIC_RECENT_EVENT_TTL),
+    };
     const cacheOps = ids.map((id) => {
       const key = this.getCacheKey(entityType, id);
       if (!freshData[id]) return this.redis.hReplaceEx(key, { notFound: '1' }, MISS_CACHE_TTL);
 
-      const fields: Record<string, string> = { [POPULATED_AT_FIELD]: populatedAt };
+      const fields: Record<string, string> = {};
       for (const [metric, value] of Object.entries(freshData[id])) fields[metric] = String(value);
-      return this.redis.hReplaceEx(key, fields, CACHE_TTL);
+      return this.redis.hReplaceStampedEx(key, cacheKeys.metricRecentEvent(entityType, id), stamp, fields, CACHE_TTL);
     });
     await this.redis.run(cacheOps);
     logger.metric(`Cached ${cacheOps.length} populated entries`);
