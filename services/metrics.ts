@@ -409,11 +409,14 @@ export class MetricService {
     };
     const cacheOps = ids.map((id) => {
       const key = this.getCacheKey(entityType, id);
-      if (!freshData[id]) return this.redis.hReplaceEx(key, { notFound: '1' }, MISS_CACHE_TTL);
+      const marker = cacheKeys.metricRecentEvent(entityType, id);
+      // Stamped too: a later event increments this hash in place, and the stamp is
+      // what makes the result refresh.
+      if (!freshData[id]) return this.redis.hReplaceStampedEx(key, marker, stamp, { notFound: '1' }, MISS_CACHE_TTL);
 
       const fields: Record<string, string> = {};
       for (const [metric, value] of Object.entries(freshData[id])) fields[metric] = String(value);
-      return this.redis.hReplaceStampedEx(key, cacheKeys.metricRecentEvent(entityType, id), stamp, fields, CACHE_TTL);
+      return this.redis.hReplaceStampedEx(key, marker, stamp, fields, CACHE_TTL);
     });
     await this.redis.run(cacheOps);
     logger.metric(`Cached ${cacheOps.length} populated entries`);
