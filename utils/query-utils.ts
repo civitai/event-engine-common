@@ -9,9 +9,19 @@ export class SimpleClickhouse {
       query = query.reduce((acc, part, i) => acc + part + this.formatSqlType(values[i] ?? ''), '');
     }
 
+    return this.queryWithSettings<T>(query, undefined);
+  }
+
+  // `query` with per-query ClickHouse settings, which apply to this query only and override the
+  // client's defaults. A plain string: the tagged-template form of `query` has no room for options.
+  public async queryWithSettings<T extends object>(
+    query: string,
+    clickhouse_settings: Record<string, unknown> | undefined
+  ): Promise<T[]> {
     const response = await this.ch.query({
       query,
       format: 'JSONEachRow',
+      ...(clickhouse_settings ? { clickhouse_settings } : {}),
     });
     const data = await response?.json<T>();
     return data as T[];
