@@ -73,7 +73,11 @@ const POINT_LOOKUP_SETTINGS = {
   timeout_overflow_mode: 'throw',
 } as const;
 const RETRY_LOOKUP_SETTINGS = { max_threads: 1 } as const;
-const LOOKUP_TIMED_OUT_TTL = 10 * 60; // 10 minutes
+// As long as a cached entry lives: a failed lookup caches nothing, so with a shorter marker an id
+// read less often than the marker lasts would be stopped at the cap on every read and never cache.
+// Kept this long, every read of a marked id either runs uncapped or comes after the old code would
+// have queried again anyway.
+const LOOKUP_TIMED_OUT_TTL = CACHE_TTL;
 
 // ClickHouse's TIMEOUT_EXCEEDED (code 159, which the client reports as a string): the server
 // stopped the query at max_execution_time.
@@ -518,16 +522,16 @@ export class MetricService {
     }
   }
 
-  // The per-query settings for one populate batch (see POINT_LOOKUP_SETTINGS). Fails open to the
+  // The per-query settings for a populate of `ids` (see POINT_LOOKUP_SETTINGS). Fails open to the
   // short cap: an unreadable marker costs at most one more stopped lookup.
   private async lookupSettings(
     entityType: EntityType,
-    batch: number[]
+    ids: number[]
   ): Promise<typeof POINT_LOOKUP_SETTINGS | typeof RETRY_LOOKUP_SETTINGS | undefined> {
-    if (batch.length > POINT_LOOKUP_MAX_IDS) return undefined;
+    if (ids.length > POINT_LOOKUP_MAX_IDS) return undefined;
     try {
       const markers = await this.redis.run(
-        batch.map((id) => this.redis.get(cacheKeys.metricLookupTimedOut(entityType, id)))
+        ids.map((id) => this.redis.get(cacheKeys.metricLookupTimedOut(entityType, id)))
       );
       if (markers.some((marker) => marker != null)) return RETRY_LOOKUP_SETTINGS;
     } catch (error) {
@@ -555,6 +559,9 @@ export class MetricService {
 
     const batches = chunk(ids, FETCH_BATCH_SIZE);
     logger.clickhouse(`Processing ${batches.length} batches of max ${FETCH_BATCH_SIZE} IDs each`);
+    // Decided for the whole populate, so the small remainder of a large populate is not capped
+    // (a stop there would throw away the batches already read).
+    const settings = await this.lookupSettings(entityType, ids);
 
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       const batch = batches[batchIndex];
@@ -562,7 +569,6 @@ export class MetricService {
       logger.clickhouse(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} IDs: [${batch.join(', ')}]`);
 
       let rawMetrics;
-      const settings = await this.lookupSettings(entityType, batch);
       try {
         logger.clickhouse(`Executing ClickHouse query for batch ${batchIndex + 1}`);
         const perDaySource = this.buildPerDaySource(
