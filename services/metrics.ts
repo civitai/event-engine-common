@@ -62,7 +62,7 @@ const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving u
 // marks its ids (LOOKUP_TIMED_OUT_TTL), and the next lookup naming any of them runs with
 // RETRY_LOOKUP_SETTINGS: still one thread, but no cap, as before this change, so it finishes
 // however slow the server is and caches. Each id then costs at most one stopped lookup (the cap)
-// more than it did before.
+// per LOOKUP_TIMED_OUT_TTL more than it did before.
 //
 // Larger batches (a fully cold page, a backfill) keep the server defaults: one thread over many ids
 // could take long enough to hit the cap every time and never cache.
