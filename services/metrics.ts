@@ -57,6 +57,12 @@ const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving u
 //   still lands; it bounds how long one lookup can hold a query slot when the server is
 //   saturated. Seconds.
 //
+// A cap alone would have the same flaw one level up: while the server stays slower than the cap,
+// nothing is cached and every lookup for those ids is stopped again. So a lookup stopped at the cap
+// marks its ids (LOOKUP_TIMED_OUT_TTL), and the next lookup naming any of them runs under the
+// longer RETRY_LOOKUP_SETTINGS cap, finishes and caches. Each id then costs at most one stopped
+// lookup more than it did before the cap.
+//
 // Larger batches (a fully cold page, a backfill) keep the server defaults: one thread over many ids
 // could take long enough to hit the cap every time and never cache.
 const POINT_LOOKUP_MAX_IDS = 100;
@@ -65,6 +71,12 @@ const POINT_LOOKUP_SETTINGS = {
   max_execution_time: 6,
   timeout_overflow_mode: 'throw',
 } as const;
+const RETRY_LOOKUP_SETTINGS = {
+  max_threads: 1,
+  max_execution_time: 30,
+  timeout_overflow_mode: 'throw',
+} as const;
+const LOOKUP_TIMED_OUT_TTL = 10 * 60; // 10 minutes
 
 // ClickHouse's TIMEOUT_EXCEEDED (code 159, which the client reports as a string): the server
 // stopped the query at max_execution_time.
@@ -322,11 +334,11 @@ export class MetricService {
           // Except when the server stopped the lookup at max_execution_time: then
           // the server is saturated, and deleting the locks would let the next
           // request for these ids query again at once, against the same saturated
-          // server, and time out again without ever caching. Instead the locks are
-          // left to expire LOCK_DURATION from now, so these ids are queried at most
-          // once per max_execution_time + LOCK_DURATION meanwhile. Requests for
-          // them in that window wait on the lock exactly as they would on a live
-          // holder (the waiter loop below), without querying.
+          // server. Instead the locks are left to expire LOCK_DURATION from now,
+          // and the lookup after that runs under the longer retry cap (see
+          // RETRY_LOOKUP_SETTINGS). Requests for these ids in that window wait on
+          // the lock exactly as they would on a live holder (the waiter loop
+          // below), without querying.
           await stopHeartbeat();
           try {
             if (serverTimedOut) {
@@ -509,6 +521,36 @@ export class MetricService {
     }
   }
 
+  // The per-query settings for one populate batch (see POINT_LOOKUP_SETTINGS). Fails open to the
+  // short cap: an unreadable marker costs at most one more stopped lookup.
+  private async lookupSettings(
+    entityType: EntityType,
+    batch: number[]
+  ): Promise<typeof POINT_LOOKUP_SETTINGS | typeof RETRY_LOOKUP_SETTINGS | undefined> {
+    if (batch.length > POINT_LOOKUP_MAX_IDS) return undefined;
+    try {
+      const markers = await this.redis.run(
+        batch.map((id) => this.redis.get(cacheKeys.metricLookupTimedOut(entityType, id)))
+      );
+      if (markers.some((marker) => marker != null)) return RETRY_LOOKUP_SETTINGS;
+    } catch (error) {
+      logger.error('MetricService', 'Lookup timeout marker read failed:', error);
+    }
+    return POINT_LOOKUP_SETTINGS;
+  }
+
+  private async markLookupTimedOut(entityType: EntityType, batch: number[]): Promise<void> {
+    try {
+      await this.redis.run(
+        batch.map((id) =>
+          this.redis.set(cacheKeys.metricLookupTimedOut(entityType, id), '1', { EX: LOOKUP_TIMED_OUT_TTL })
+        )
+      );
+    } catch (error) {
+      logger.error('MetricService', 'Lookup timeout marker write failed:', error);
+    }
+  }
+
   private async fetchFromClickhouse<T extends EntityType>(entityType: T, ids: number[]): Promise<Record<number, EntityMetricMap[T]>> {
     const startTime = Date.now();
     logger.clickhouse(`fetchFromClickhouse() called for entityType: ${entityType}, ${ids.length} IDs: [${ids.join(', ')}]`);
@@ -523,6 +565,7 @@ export class MetricService {
       logger.clickhouse(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} IDs: [${batch.join(', ')}]`);
 
       let rawMetrics;
+      const settings = await this.lookupSettings(entityType, batch);
       try {
         logger.clickhouse(`Executing ClickHouse query for batch ${batchIndex + 1}`);
         const perDaySource = this.buildPerDaySource(
@@ -540,12 +583,15 @@ export class MetricService {
           GROUP BY entityId, metricType
           HAVING value > 0;
         `,
-          batch.length <= POINT_LOOKUP_MAX_IDS ? POINT_LOOKUP_SETTINGS : undefined
+          settings
         );
         const batchTime = Date.now() - batchStartTime;
         logger.clickhouse(`ClickHouse query completed for batch ${batchIndex + 1} in ${batchTime}ms, got ${rawMetrics.length} rows`);
       } catch (error) {
         logger.error('ClickHouse', `Query failed for batch ${batchIndex + 1}:`, error);
+        if (settings === POINT_LOOKUP_SETTINGS && isServerTimeout(error)) {
+          await this.markLookupTimedOut(entityType, batch);
+        }
         throw error;
       }
 
