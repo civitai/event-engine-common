@@ -43,6 +43,34 @@ const LOCK_HEARTBEAT_MS = 5000; // re-extend held locks every 5s during a popula
 const LOCK_RETRY_DELAY = 200; // delay between waiter cache-poll retries
 const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving up
 
+// Settings for the populate lookup when it names at most POINT_LOOKUP_MAX_IDS ids, which is nearly
+// every call: a populate is only for cache misses, a few ids each.
+//
+// - max_threads 1: a lookup of a few ids gains nothing from more threads, and each extra thread
+//   competes for the server's CPU slots, so under load every lookup waits on the others.
+// - max_execution_time: a cap on the SERVER, because the app's own budget for this read
+//   (CLICKHOUSE_IMAGE_METRICS_TIMEOUT_MS, 3s by default) only stops the caller waiting. The query
+//   is deliberately not cancelled when the caller gives up: a lookup that finishes a little late
+//   still fills the cache, so the next request for those ids is a cache hit. Cancelling at the
+//   caller's budget would mean that once the server is slower than the budget nothing is ever
+//   cached and every request queries again. Above the budget, so a lookup that is merely slow
+//   still lands; it bounds how long one lookup can hold a query slot when the server is
+//   saturated. Seconds.
+//
+// Larger batches (a fully cold page, a backfill) keep the server defaults: one thread over many ids
+// could take long enough to hit the cap every time and never cache.
+const POINT_LOOKUP_MAX_IDS = 100;
+const POINT_LOOKUP_SETTINGS = {
+  max_threads: 1,
+  max_execution_time: 6,
+  timeout_overflow_mode: 'throw',
+} as const;
+
+// ClickHouse's TIMEOUT_EXCEEDED (code 159, which the client reports as a string): the server
+// stopped the query at max_execution_time.
+const isServerTimeout = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && String((error as { code?: unknown }).code) === '159';
+
 // The read path pulls per-day totals from `entityMetricDailyAgg_v2`, a read
 // VIEW that already returns FINAL per-day totals directly (no append-churn,
 // always fresh), so reads select `total` straight without any argMax dedup.
@@ -272,6 +300,7 @@ export class MetricService {
         // duplicate queries for the same ids -> thundering herd. Always stopped
         // and the locks always released in the `finally` below.
         const stopHeartbeat = this.startLockHeartbeat(entityType, lockedIds);
+        let serverTimedOut = false;
         try {
           // Lock release is handled in `finally` so it runs even if the populate
           // or its cache write throws.
@@ -280,6 +309,7 @@ export class MetricService {
             if (freshData[id]) results[id] = freshData[id];
           }
         } catch (error) {
+          serverTimedOut = isServerTimeout(error);
           logger.error('MetricService', 'Populate/cache operations failed:', error);
           throw error;
         } finally {
@@ -288,12 +318,28 @@ export class MetricService {
           // left the locks dangling until their TTL, blocking all waiters for
           // those ids for the full duration. Await the stop so no in-flight
           // EXPIRE can re-arm a lock after we delete it (ownerless-lock race).
+          //
+          // Except when the server stopped the lookup at max_execution_time: then
+          // the server is saturated, and deleting the locks would let the next
+          // request for these ids query again at once, against the same saturated
+          // server, and time out again without ever caching. Instead the locks are
+          // left to expire LOCK_DURATION from now, so these ids are queried at most
+          // once per max_execution_time + LOCK_DURATION meanwhile. Requests for
+          // them in that window wait on the lock exactly as they would on a live
+          // holder (the waiter loop below), without querying.
           await stopHeartbeat();
           try {
-            await this.redis.run(
-              lockedIds.map((id) => this.redis.del(this.getLockKey(entityType, id)))
-            );
-            logger.metric(`Released ${lockedIds.length} populate locks`);
+            if (serverTimedOut) {
+              await this.redis.run(
+                lockedIds.map((id) => this.redis.expire(this.getLockKey(entityType, id), LOCK_DURATION))
+              );
+              logger.metric(`Left ${lockedIds.length} populate locks to expire after a server timeout`);
+            } else {
+              await this.redis.run(
+                lockedIds.map((id) => this.redis.del(this.getLockKey(entityType, id)))
+              );
+              logger.metric(`Released ${lockedIds.length} populate locks`);
+            }
           } catch (releaseError) {
             logger.error('MetricService', 'Lock release failed:', releaseError);
           }
@@ -484,7 +530,8 @@ export class MetricService {
           batch,
           ENTITY_METRIC_TYPES[entityType]
         );
-        rawMetrics = await this.ch.query<{ entityId: number; metricType: string; value: number }>(`
+        rawMetrics = await this.ch.queryWithSettings<{ entityId: number; metricType: string; value: number }>(
+          `
           SELECT
             entityId,
             metricType,
@@ -492,7 +539,9 @@ export class MetricService {
           FROM ${perDaySource}
           GROUP BY entityId, metricType
           HAVING value > 0;
-        `);
+        `,
+          batch.length <= POINT_LOOKUP_MAX_IDS ? POINT_LOOKUP_SETTINGS : undefined
+        );
         const batchTime = Date.now() - batchStartTime;
         logger.clickhouse(`ClickHouse query completed for batch ${batchIndex + 1} in ${batchTime}ms, got ${rawMetrics.length} rows`);
       } catch (error) {
