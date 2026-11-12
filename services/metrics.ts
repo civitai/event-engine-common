@@ -59,9 +59,10 @@ const LOCK_MAX_RETRIES = 15; // waiter cache-poll attempts (~3s) before giving u
 //
 // A cap alone would have the same flaw one level up: while the server stays slower than the cap,
 // nothing is cached and every lookup for those ids is stopped again. So a lookup stopped at the cap
-// marks its ids (LOOKUP_TIMED_OUT_TTL), and the next lookup naming any of them runs under the
-// longer RETRY_LOOKUP_SETTINGS cap, finishes and caches. Each id then costs at most one stopped
-// lookup more than it did before the cap.
+// marks its ids (LOOKUP_TIMED_OUT_TTL), and the next lookup naming any of them runs with
+// RETRY_LOOKUP_SETTINGS: still one thread, but no cap, as before this change, so it finishes
+// however slow the server is and caches. Each id then costs at most one stopped lookup (the cap)
+// more than it did before.
 //
 // Larger batches (a fully cold page, a backfill) keep the server defaults: one thread over many ids
 // could take long enough to hit the cap every time and never cache.
@@ -71,11 +72,7 @@ const POINT_LOOKUP_SETTINGS = {
   max_execution_time: 6,
   timeout_overflow_mode: 'throw',
 } as const;
-const RETRY_LOOKUP_SETTINGS = {
-  max_threads: 1,
-  max_execution_time: 30,
-  timeout_overflow_mode: 'throw',
-} as const;
+const RETRY_LOOKUP_SETTINGS = { max_threads: 1 } as const;
 const LOOKUP_TIMED_OUT_TTL = 10 * 60; // 10 minutes
 
 // ClickHouse's TIMEOUT_EXCEEDED (code 159, which the client reports as a string): the server
@@ -335,7 +332,7 @@ export class MetricService {
           // the server is saturated, and deleting the locks would let the next
           // request for these ids query again at once, against the same saturated
           // server. Instead the locks are left to expire LOCK_DURATION from now,
-          // and the lookup after that runs under the longer retry cap (see
+          // and the lookup after that runs without the cap (see
           // RETRY_LOOKUP_SETTINGS). Requests for these ids in that window wait on
           // the lock exactly as they would on a live holder (the waiter loop
           // below), without querying.
