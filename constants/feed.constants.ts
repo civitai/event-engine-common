@@ -34,7 +34,6 @@ export const NSFW_RESTRICTED_BASE_MODELS = [
   'SD 3.5 Large Turbo',
   'Ideogram 4.0',
   'Ideogram 4.5',
-  'Fibo 2.0',
 ] as const;
 
 /**
