@@ -72,6 +72,30 @@ const redisHelpers = (redis: IRedisClient) => {
       redis.call('HSET', KEYS[1], ARGV[2], stamp, unpack(ARGV, 5))
       return redis.call('EXPIRE', KEYS[1], ARGV[1])
     `,
+    // hReplaceStampedEx that never lowers a field while the marker KEYS[2] exists: each
+    // ARGV[5..] field is written as the larger of its current and new value (compared as
+    // numbers; a non-numeric side takes the new value), and current fields the new value
+    // lacks are kept. Without the marker it is exactly hReplaceStampedEx. Same ARGV layout.
+    hMergeStampedEx: `
+      local stamp = ARGV[3]
+      local fields = {}
+      if redis.call('EXISTS', KEYS[2]) == 1 then
+        stamp = ARGV[4]
+        for i = 5, #ARGV, 2 do
+          local value = ARGV[i + 1]
+          local current = redis.call('HGET', KEYS[1], ARGV[i])
+          local currentNum, valueNum = tonumber(current), tonumber(value)
+          if currentNum and valueNum and currentNum > valueNum then value = current end
+          fields[#fields + 1] = ARGV[i]
+          fields[#fields + 1] = value
+        end
+      else
+        redis.call('DEL', KEYS[1])
+        for i = 5, #ARGV do fields[#fields + 1] = ARGV[i] end
+      end
+      redis.call('HSET', KEYS[1], ARGV[2], stamp, unpack(fields))
+      return redis.call('EXPIRE', KEYS[1], ARGV[1])
+    `,
   };
   const scriptShas: Partial<Record<keyof typeof scripts, string>> = {};
 
@@ -115,6 +139,21 @@ const redisHelpers = (redis: IRedisClient) => {
         ttl: number
       ) {
         return executeScript('hReplaceStampedEx', [key, markerKey], [
+          String(ttl),
+          stamp.field,
+          stamp.value,
+          stamp.ifMarker,
+          ...Object.entries(fields).flat(),
+        ]);
+      },
+      async hMergeStampedEx(
+        key: string,
+        markerKey: string,
+        stamp: { field: string; value: string; ifMarker: string },
+        fields: Record<string, string>,
+        ttl: number
+      ) {
+        return executeScript('hMergeStampedEx', [key, markerKey], [
           String(ttl),
           stamp.field,
           stamp.value,

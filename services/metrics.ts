@@ -93,12 +93,25 @@ const isServerTimeout = (error: unknown): boolean =>
 // so the source is hardcoded here.)
 const ENTITY_METRIC_AGG_TABLE = 'entityMetricDailyAgg_v2';
 
+export type MetricServiceOptions = {
+  // Off by default. The totals a populate reads can trail the live increments by up to a
+  // minute, so a populate can overwrite a just-incremented count with an older, lower
+  // snapshot. When on, a populate that runs while the entry's recent-event marker
+  // (cacheKeys.metricRecentEvent) exists never lowers a field and keeps fields its snapshot
+  // lacks; without the marker it replaces the entry as before. The trade-off: a count that
+  // legitimately dropped inside that window (a removed reaction) can read high until the
+  // refresh the marker schedules, at most METRIC_RECENT_EVENT_TTL.
+  neverLowerRecentPopulate?: boolean;
+};
+
 export class MetricService {
   private ch: SimpleClickhouse;
   private redis: RedisWithHelpers;
-  constructor(ch: IClickhouseClient, redis: IRedisClient) {
+  private neverLowerRecentPopulate: boolean;
+  constructor(ch: IClickhouseClient, redis: IRedisClient, options: MetricServiceOptions = {}) {
     this.ch = new SimpleClickhouse(ch);
     this.redis = withRedisHelpers(redis);
+    this.neverLowerRecentPopulate = options.neverLowerRecentPopulate ?? false;
     logger.metric('Initialized with ClickHouse and Redis clients');
     logger.metric('Redis client type:', typeof redis);
     logger.metric('Redis client constructor:', redis.constructor.name);
@@ -466,16 +479,21 @@ export class MetricService {
       value: String(nowSeconds),
       ifMarker: String(nowSeconds - REFRESH_AFTER + METRIC_RECENT_EVENT_TTL),
     };
+    // See MetricServiceOptions.neverLowerRecentPopulate. Both scripts take the same arguments
+    // and are identical when the marker is absent.
+    const write = this.neverLowerRecentPopulate
+      ? this.redis.hMergeStampedEx
+      : this.redis.hReplaceStampedEx;
     const cacheOps = ids.map((id) => {
       const key = this.getCacheKey(entityType, id);
       const marker = cacheKeys.metricRecentEvent(entityType, id);
       // Stamped too: a later event increments this hash in place, and the stamp is
       // what makes the result refresh.
-      if (!freshData[id]) return this.redis.hReplaceStampedEx(key, marker, stamp, { notFound: '1' }, MISS_CACHE_TTL);
+      if (!freshData[id]) return write(key, marker, stamp, { notFound: '1' }, MISS_CACHE_TTL);
 
       const fields: Record<string, string> = {};
       for (const [metric, value] of Object.entries(freshData[id])) fields[metric] = String(value);
-      return this.redis.hReplaceStampedEx(key, marker, stamp, fields, CACHE_TTL);
+      return write(key, marker, stamp, fields, CACHE_TTL);
     });
     await this.redis.run(cacheOps);
     logger.metric(`Cached ${cacheOps.length} populated entries`);
